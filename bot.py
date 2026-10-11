@@ -58,13 +58,19 @@ async def start_command(client: Client, message: Message):
 
 @bot.on_message(filters.command("id"))
 async def get_id(client: Client, message: Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else "Unknown")
+    
+    response = f"📍 **चैट/ग्रुप ID:** `{chat_id}`\n👤 **आपकी ID:** `{user_id}`"
+    
     if message.reply_to_message:
-        text = f"👤 User ID: `{message.reply_to_message.from_user.id}`\n"
-        if message.reply_to_message.forward_from_chat:
-            text += f"📢 Channel/Chat ID: `{message.reply_to_message.forward_from_chat.id}`"
-        await message.reply_text(text)
-    else:
-        await message.reply_text(f"👉 आपकी Telegram ID है: `{message.from_user.id}`")
+        rep = message.reply_to_message
+        rep_user = rep.from_user.id if rep.from_user else (rep.sender_chat.id if rep.sender_chat else "Anonymous")
+        response += f"\n\n↩️ **रिप्लाई यूजर ID:** `{rep_user}`"
+        if rep.forward_from_chat:
+            response += f"\n📢 **फॉरवर्ड चैट ID:** `{rep.forward_from_chat.id}`"
+            
+    await message.reply_text(response)
 
 @bot.on_message(filters.command("plans") & filters.private)
 async def show_plans(client: Client, message: Message):
