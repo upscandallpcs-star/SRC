@@ -1,13 +1,13 @@
 import asyncio
-import math
-import time
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from config import API_ID, API_HASH, BOT_TOKEN, ADMINS, OWNER_HANDLE, SUPPORT_GROUP
 from db import db
 
-# pyromod इम्पोर्ट ताकि ask() बिना एरर के चले
-import pyromod
+try:
+    import pyromod
+except ImportError:
+    pass
 
 class Bot(Client):
     def __init__(self):
@@ -33,30 +33,7 @@ class Bot(Client):
 
 bot = Bot()
 
-# ----------------- PROGRESS HELPER ----------------- #
-def humanbytes(size):
-    if not size:
-        return "0 B"
-    power = 1024
-    t_n = 0
-    power_labels = {0: ' ', 1: 'K', 2: 'M', 3: 'G', 4: 'T'}
-    while size > power:
-        size /= power
-        t_n += 1
-    return f"{round(size, 2)} {power_labels[t_n]}B"
-
-def time_formatter(milliseconds: int) -> str:
-    seconds, milliseconds = divmod(int(milliseconds), 1000)
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    days, hours = divmod(hours, 24)
-    tmp = ((str(days) + "d, ") if days else "") + \
-        ((str(hours) + "h, ") if hours else "") + \
-        ((str(minutes) + "m, ") if minutes else "") + \
-        ((str(seconds) + "s") if seconds else "")
-    return tmp if tmp else "0s"
-
-# ----------------- USER COMMANDS ----------------- #
+# ----------------- COMMANDS ----------------- #
 @bot.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
     user_id = message.from_user.id
@@ -129,13 +106,12 @@ async def my_plan(client: Client, message: Message):
         f"सपोर्ट: {OWNER_HANDLE}"
     )
 
-# ----------------- ADMIN COMMANDS ----------------- #
 @bot.on_message(filters.command("setplan") & filters.user(ADMINS))
 async def set_plan_admin(client: Client, message: Message):
     try:
         parts = message.text.split()
         if len(parts) != 3:
-            return await message.reply_text("❌ गलत फॉर्मेट!\nउदाहरण: `/setplan 150 15` (प्राइस दिन)")
+            return await message.reply_text("❌ गलत फॉर्मेट!\nउदाहरण: `/setplan 150 15`")
         price = parts[1]
         days = parts[2]
         db.set_plan_config(price, days)
@@ -148,7 +124,7 @@ async def add_user_admin(client: Client, message: Message):
     try:
         parts = message.text.split()
         if len(parts) < 2:
-            return await message.reply_text("❌ गलत फॉर्मेट!\nउदाहरण: `/adduser 123456789` या `/adduser 123456789 30`")
+            return await message.reply_text("❌ गलत फॉर्मेट!\nउदाहरण: `/adduser 123456789`")
         target_id = int(parts[1])
         config = db.get_plan_config()
         days = int(parts[2]) if len(parts) > 2 else int(config['plan_days'])
@@ -158,7 +134,7 @@ async def add_user_admin(client: Client, message: Message):
         try:
             await client.send_message(
                 target_id,
-                f"🎉 **बधाई हो!** आपका VIP सब्सक्रिप्शन एक्टिवेट कर दिया गया है ({days} दिन के लिए)।\nअब आप बॉट का इस्तेमाल कर सकते हैं।"
+                f"🎉 **बधाई हो!** आपका VIP सब्सक्रिप्शन एक्टिवेट कर दिया गया है ({days} दिन के लिए)।"
             )
         except Exception:
             pass
@@ -177,11 +153,6 @@ async def remove_user_admin(client: Client, message: Message):
     except Exception as e:
         await message.reply_text(f"Error: {e}")
 
-# ----------------- MAIN RUNNER ----------------- #
-async def main():
-    await bot.start()
-    print("Bot is fully running!")
-    await asyncio.Event().wait()
-
+# ----------------- RUNNER ----------------- #
 if __name__ == "__main__":
-    asyncio.run(main())
+    bot.run()
