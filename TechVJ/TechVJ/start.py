@@ -41,8 +41,8 @@ def time_formatter(seconds: int) -> str:
         ((str(seconds) + "s") if seconds else "")
     return tmp if tmp else "0s"
 
-# सुरक्षित लाइव प्रोग्रेस बार
-async def progress_bar(current, total, ud_type, message, start):
+# लाइव प्रोग्रेस बार जिसमें फ़ाइल नेम भी दिखेगा
+async def progress_bar(current, total, ud_type, message, start, fname=""):
     now = time.time()
     diff = now - start
     if round(diff % 4.00) == 0 or current == total:
@@ -58,8 +58,11 @@ async def progress_bar(current, total, ud_type, message, start):
         filled_length = int(bar_length * current // total) if total > 0 else 0
         bar = '▰' * filled_length + '▱' * (bar_length - filled_length)
 
+        fname_text = f"📁 **File:** `{fname[:30]}...`\n" if fname else ""
+
         status_text = (
             f"**{ud_type}**\n"
+            f"{fname_text}"
             f"[{bar}] {percentage:.1f}%\n"
             f"⚡ **Speed:** {humanbytes(speed)}/s\n"
             f"📦 **Done:** {humanbytes(current)} / {humanbytes(total)}\n"
@@ -97,10 +100,8 @@ async def send_cancel(client: Client, message: Message):
         del batch_temp.CLONE_DATA[user_id]
     await message.reply_text("🛑 **टास्क रद्द कर दिया गया है।**")
 
-# टेलीग्राम लिंक पार्सर
 def parse_telegram_link(link: str):
     link = link.strip().replace("?single", "")
-    
     c_match = re.search(r"t\.me/c/(\d+)(?:/\d+)?/(\d+)", link)
     if c_match:
         chat_id = int("-100" + c_match.group(1))
@@ -199,6 +200,8 @@ async def clone_command(client: Client, message: Message):
         "target_chat": target_chat,
         "custom_caption": None,
         "extra_caption": None,
+        "replace_find": None,
+        "replace_with": None,
         "thumb_path": None
     }
 
@@ -209,11 +212,14 @@ async def show_customization_menu(client: Client, user_id: int):
     cap_status = "सेट है ✅" if data.get("custom_caption") else "डिफ़ॉल्ट"
     ext_status = "सेट है ✅" if data.get("extra_caption") else "कोई नहीं"
     thm_status = "सेट है ✅" if data.get("thumb_path") else "डिफ़ॉल्ट"
+    
+    rep_status = f"`{data.get('replace_find')}` ➔ `{data.get('replace_with')}`" if data.get("replace_find") else "कोई नहीं"
 
     panel_text = (
         "⚙️ **कंटेंट कस्टमाइज़ेशन सेटिंग्स:**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"📝 नया कैप्शन: `{cap_status}`\n"
+        f"📝 पूरा नया कैप्शन: `{cap_status}`\n"
+        f"🔄 रिप्लेस (बदलना): {rep_status}\n"
         f"➕ अतिरिक्त कैप्शन: `{ext_status}`\n"
         f"🖼️ थंबनेल: `{thm_status}`\n"
         f"🎯 टारगेट चैट: `{data.get('target_chat')}`\n"
@@ -223,11 +229,12 @@ async def show_customization_menu(client: Client, user_id: int):
     )
 
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📝 Edit Caption", callback_data="set_caption"),
-         InlineKeyboardButton("➕ Add Extra Caption", callback_data="set_extra")],
-        [InlineKeyboardButton("🖼️ Set Thumbnail", callback_data="set_thumb"),
-         InlineKeyboardButton("🗑️ Clear Settings", callback_data="clear_settings")],
-        [InlineKeyboardButton("🚀 Confirm & Start", callback_data="confirm_start")]
+        [InlineKeyboardButton("📝 Edit Full Caption", callback_data="set_caption"),
+         InlineKeyboardButton("🔄 Replace in Caption", callback_data="set_replace")],
+        [InlineKeyboardButton("➕ Add Extra Caption", callback_data="set_extra"),
+         InlineKeyboardButton("🖼️ Set Thumbnail", callback_data="set_thumb")],
+        [InlineKeyboardButton("🗑️ Clear Settings", callback_data="clear_settings"),
+         InlineKeyboardButton("🚀 Confirm & Start", callback_data="confirm_start")]
     ])
     await client.send_message(user_id, panel_text, reply_markup=buttons)
 
@@ -242,8 +249,33 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
     if data == "set_caption":
         await query.message.delete()
-        msg = await client.ask(user_id, "✍️ **नया कस्टम कैप्शन भेजें** (यह ओरिजिनल कैप्शन को बदल देगा):", filters=filters.text, timeout=180)
+        msg = await client.ask(user_id, "✍️ **नया कस्टम कैप्शन भेजें** (यह पूरे ओरिजिनल कैप्शन को बदल देगा):", filters=filters.text, timeout=180)
         batch_temp.CLONE_DATA[user_id]["custom_caption"] = msg.text
+        await show_customization_menu(client, user_id)
+
+    elif data == "set_replace":
+        await query.message.delete()
+        find_msg = await client.ask(
+            user_id, 
+            "🔍 **कैप्शन में क्या खोजना/हटाना चाहते हैं? वह शब्द/टेक्स्ट भेजें:**\n(उदा: `𝚾 𝚫 𝚬 𝚸 · ༎🥀`)\n\nरद्द करने के लिए /cancel लिखें।", 
+            filters=filters.text, 
+            timeout=180
+        )
+        if find_msg.text == "/cancel":
+            return await show_customization_menu(client, user_id)
+        
+        with_msg = await client.ask(
+            user_id, 
+            f"✏️ `{find_msg.text}` की जगह पर **क्या नया नाम/टेक्स्ट लगाना चाहते हैं?**\n(हटाकर खाली छोड़ने के लिए `/empty` लिखें):", 
+            filters=filters.text, 
+            timeout=180
+        )
+        if with_msg.text == "/cancel":
+            return await show_customization_menu(client, user_id)
+
+        rep_text = "" if with_msg.text.strip() == "/empty" else with_msg.text
+        batch_temp.CLONE_DATA[user_id]["replace_find"] = find_msg.text
+        batch_temp.CLONE_DATA[user_id]["replace_with"] = rep_text
         await show_customization_menu(client, user_id)
 
     elif data == "set_extra":
@@ -263,6 +295,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
     elif data == "clear_settings":
         batch_temp.CLONE_DATA[user_id]["custom_caption"] = None
         batch_temp.CLONE_DATA[user_id]["extra_caption"] = None
+        batch_temp.CLONE_DATA[user_id]["replace_find"] = None
+        batch_temp.CLONE_DATA[user_id]["replace_with"] = None
         if batch_temp.CLONE_DATA[user_id].get("thumb_path") and os.path.exists(batch_temp.CLONE_DATA[user_id]["thumb_path"]):
             os.remove(batch_temp.CLONE_DATA[user_id]["thumb_path"])
         batch_temp.CLONE_DATA[user_id]["thumb_path"] = None
@@ -289,7 +323,6 @@ async def start_clone_task(client: Client, user_id: int):
     if not user_session:
         return await client.send_message(user_id, "❌ आपका लॉगिन सेशन नहीं मिला। कृपया पहले /login करें।")
 
-    # config से सीधा API_ID और API_HASH लिया गया ताकि कभी 'लॉगिन डेटा नहीं मिला' एरर न आए
     user_api_id = int(db.get_api_id(user_id) or API_ID)
     user_api_hash = db.get_api_hash(user_id) or API_HASH
 
@@ -351,6 +384,15 @@ async def start_clone_task(client: Client, user_id: int):
     )
     await status_msg.edit_text(summary_card)
 
+def get_file_name_from_msg(msg: Message) -> str:
+    if msg.document and msg.document.file_name:
+        return msg.document.file_name
+    elif msg.video and msg.video.file_name:
+        return msg.video.file_name
+    elif msg.audio and msg.audio.file_name:
+        return msg.audio.file_name
+    return "Media File"
+
 async def process_media(client: Client, acc: Client, user_id: int, source_chat, msgid: int, target_chat, task: dict, status_msg: Message):
     try:
         msg: Message = await acc.get_messages(source_chat, msgid)
@@ -360,27 +402,45 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         print(f"Message fetch error: {e}")
         return False, 0
 
+    # कैप्शन प्रोसेसिंग (Replace / Edit / Extra)
     final_caption = msg.caption or ""
+
     if task.get("custom_caption"):
         final_caption = task["custom_caption"]
+    elif task.get("replace_find"):
+        find_w = task["replace_find"]
+        with_w = task.get("replace_with") or ""
+        if final_caption:
+            final_caption = final_caption.replace(find_w, with_w)
+
     if task.get("extra_caption"):
         final_caption = f"{final_caption}\n\n{task['extra_caption']}" if final_caption else task["extra_caption"]
 
-    # केवल टेक्स्ट मैसेज
+    # केवल टेक्स्ट मैसेज होने पर
     if msg.text:
-        text_to_send = task.get("custom_caption") or msg.text
+        text_to_send = msg.text
+        if task.get("custom_caption"):
+            text_to_send = task["custom_caption"]
+        elif task.get("replace_find"):
+            find_w = task["replace_find"]
+            with_w = task.get("replace_with") or ""
+            text_to_send = text_to_send.replace(find_w, with_w)
+
         if task.get("extra_caption"):
             text_to_send += f"\n\n{task['extra_caption']}"
         await client.send_message(target_chat, text_to_send, entities=msg.entities)
         return True, len(text_to_send.encode('utf-8'))
 
+    # फ़ाइल का नाम निकालना
+    file_name = get_file_name_from_msg(msg)
+
     down_start = time.time()
-    await status_msg.edit_text(f"📥 **Downloading ID:** `{msgid}`...")
+    await status_msg.edit_text(f"📥 **Downloading ID:** `{msgid}`\n📁 **File:** `{file_name}`...")
     
     file_path = await acc.download_media(
         msg,
         progress=progress_bar,
-        progress_args=(f"📥 Downloading ID: {msgid}", status_msg, down_start)
+        progress_args=(f"📥 Downloading ID: {msgid}", status_msg, down_start, file_name)
     )
 
     if not file_path or not os.path.exists(file_path):
@@ -388,7 +448,7 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
 
     size = os.path.getsize(file_path)
     up_start = time.time()
-    await status_msg.edit_text(f"📤 **Uploading ID:** `{msgid}`...")
+    await status_msg.edit_text(f"📤 **Uploading ID:** `{msgid}`\n📁 **File:** `{file_name}`...")
 
     thumb_to_use = task.get("thumb_path")
 
@@ -396,18 +456,18 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         if msg.document:
             await client.send_document(
                 target_chat, file_path, thumb=thumb_to_use, caption=final_caption,
-                progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start)
+                progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start, file_name)
             )
         elif msg.video:
             await client.send_video(
                 target_chat, file_path, thumb=thumb_to_use, caption=final_caption,
                 duration=msg.video.duration, width=msg.video.width, height=msg.video.height,
-                progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start)
+                progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start, file_name)
             )
         elif msg.audio:
             await client.send_audio(
                 target_chat, file_path, thumb=thumb_to_use, caption=final_caption,
-                progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start)
+                progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start, file_name)
             )
         elif msg.photo:
             await client.send_photo(target_chat, file_path, caption=final_caption)
