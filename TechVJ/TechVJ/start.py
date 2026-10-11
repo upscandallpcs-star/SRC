@@ -1,7 +1,7 @@
 import os
 import asyncio 
 import time
-import pyrogram
+import math
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import ADMINS, CHANNEL_ID, WAITING_TIME
@@ -40,21 +40,48 @@ def time_formatter(seconds: int) -> str:
         ((str(seconds) + "s") if seconds else "")
     return tmp if tmp else "0s"
 
-def progress(current, total, message, type_):
-    with open(f'{message.id}{type_}status.txt', "w") as f:
-        f.write(f"{current * 100 / total:.1f}%")
+# लाइव प्रोग्रेस बार (प्रतिशत, स्पीड, ETA)
+async def progress_bar(current, total, ud_type, message, start):
+    now = time.time()
+    diff = now - start
+    if round(diff % 4.00) == 0 or current == total:
+        percentage = current * 100 / total
+        speed = current / diff if diff > 0 else 0
+        elapsed_time = round(diff)
+        eta = round((total - current) / speed) if speed > 0 else 0
+        
+        elapsed_str = time_formatter(elapsed_time)
+        eta_str = time_formatter(eta)
 
-async def track_status(client, statusfile, message, label):
-    while not os.path.exists(statusfile):
-        await asyncio.sleep(2)
-    while os.path.exists(statusfile):
+        bar_length = 10
+        filled_length = int(bar_length * current // total)
+        bar = '▰' * filled_length + '▱' * (bar_length - filled_length)
+
+        status_text = (
+            f"**{ud_type}**\n"
+            f"[{bar}] {percentage:.1f}%\n"
+            f"⚡ **Speed:** {humanbytes(speed)}/s\n"
+            f"📦 **Done:** {humanbytes(current)} / {humanbytes(total)}\n"
+            f"⏱️ **ETA:** {eta_str} | **Time:** {elapsed_str}"
+        )
         try:
-            with open(statusfile, "r") as f:
-                txt = f.read()
-            await message.edit_text(f"**{label}:** `{txt}`")
-            await asyncio.sleep(4)
+            await message.edit_text(status_text)
         except Exception:
-            await asyncio.sleep(3)
+            pass
+
+# हर जगह काम करने वाला /id कमांड
+@Client.on_message(filters.command("id"))
+async def get_id(client: Client, message: Message):
+    if message.reply_to_message:
+        text = f"👤 **User ID:** `{message.reply_to_message.from_user.id}`\n"
+        if message.reply_to_message.sender_chat:
+            text += f"📢 **Channel/Group ID:** `{message.reply_to_message.sender_chat.id}`\n"
+        if message.reply_to_message.forward_from_chat:
+            text += f"forwarded Chat ID: `{message.reply_to_message.forward_from_chat.id}`\n"
+        await message.reply_text(text)
+    else:
+        text = f"📍 **Chat ID:** `{message.chat.id}`\n👤 **Your ID:** `{message.from_user.id}`"
+        await message.reply_text(text)
 
 @Client.on_message(filters.command(["help"]))
 async def send_help(client: Client, message: Message):
@@ -67,7 +94,26 @@ async def send_cancel(client: Client, message: Message):
         del batch_temp.CLONE_DATA[message.from_user.id]
     await message.reply_text("🛑 **टास्क रद्द कर दिया गया है।**")
 
-# ----------------- /clone STEP-BY-STEP WORKFLOW ----------------- #
+# ----------------- /clone WORKFLOW ----------------- #
+def parse_telegram_link(link: str):
+    link = link.strip().replace("?single", "")
+    parts = [p for p in link.split("/") if p]
+    try:
+        msg_id = int(parts[-1])
+    except ValueError:
+        return None, None
+
+    if "t.me/c/" in link:
+        # प्राइवेट चैनल / टॉपिक ग्रुप
+        chat_id = int("-100" + parts[3])
+        return chat_id, msg_id
+    elif "t.me/b/" in link:
+        # बॉट चैट
+        return parts[3], msg_id
+    else:
+        # पब्लिक चैनल / टॉपिक ग्रुप
+        return parts[2], msg_id
+
 @Client.on_message(filters.command(["clone", "clon"]) & filters.private)
 async def clone_command(client: Client, message: Message):
     user_id = message.from_user.id
@@ -75,38 +121,35 @@ async def clone_command(client: Client, message: Message):
     if not db.is_user_vip(user_id, ADMINS):
         return await message.reply_text(
             "🔒 **यह फीचर केवल एक्टिव पेड मेंबर्स के लिए है!**\n\n"
-            "कंटेंट डाउनलोड करने के लिए प्लान खरीदें।\n"
-            "प्लान देखने के लिए: /plans"
+            "कंटेंट डाउनलोड करने के लिए प्लान खरीदें: /plans"
         )
 
     if batch_temp.IS_BATCH.get(user_id) == False:
-        return await message.reply_text("⚠️ एक टास्क पहले से चल रहा है। कृपया उसके पूरा होने का इंतज़ार करें या /cancel करें।")
+        return await message.reply_text("⚠️ एक टास्क पहले से चल रहा है। इंतज़ार करें या /cancel करें।")
 
     user_session = db.get_session(user_id)
     if not user_session:
-        return await message.reply_text("🔑 प्राइवेट व रेस्ट्रिक्टेड कंटेंट के लिए पहले **/login** करें।")
+        return await message.reply_text("🔑 प्राइवेट फाइल्स के लिए पहले **/login** करें।")
 
-    # दिशा-निर्देश
     guide_text = (
-        "📖 **कंटेंट क्लोनिंग दिशा-निर्देश (Instructions):**\n"
+        "📖 **कंटेंट क्लोनिंग दिशा-निर्देश:**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "1. **Public Chat:** `https://t.me/channel_username/1234`\n"
-        "2. **Private Chat:** `https://t.me/c/1234567890/1234`\n"
-        "3. **Bot Chat:** `https://t.me/b/bot_username/1234`\n"
+        "1. **Public:** `https://t.me/username/123`\n"
+        "2. **Private:** `https://t.me/c/123456789/123`\n"
+        "3. **Topic Group:** `https://t.me/username/topic_id/msg_id`\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👉 **स्टेप 1:** जहाँ से कॉपी करना है, उस पोस्ट की **पहली लिंक (Start Link)** भेजें:\n"
-        "(रद्द करने के लिए /cancel लिखें)"
+        "👉 **स्टेप 1:** जहाँ से कॉपी करना है, उसकी **पहली लिंक (Start Link)** भेजें:"
     )
     
     first_msg = await client.ask(user_id, guide_text, filters=filters.text, timeout=300)
     if first_msg.text == "/cancel":
         return await first_msg.reply("❌ प्रोसेस रद्द कर दिया गया।")
-    if "https://t.me/" not in first_msg.text:
-        return await first_msg.reply("❌ अमान्य टेलीग्राम लिंक! दोबारा /clone करें।")
-
+    
     start_link = first_msg.text.strip()
+    s_chat, s_id = parse_telegram_link(start_link)
+    if not s_id:
+        return await first_msg.reply("❌ अमान्य टेलीग्राम लिंक! कृपया सही लिंक के साथ दोबारा /clone करें।")
 
-    # अंतिम लिंक मांगना
     last_msg = await client.ask(
         user_id, 
         "👉 **स्टेप 2:** अब **अंतिम लिंक (End Link)** भेजें:\n"
@@ -117,25 +160,38 @@ async def clone_command(client: Client, message: Message):
     if last_msg.text == "/cancel":
         return await last_msg.reply("❌ प्रोसेस रद्द कर दिया गया।")
     
-    end_link = start_link if last_msg.text == "/single" else last_msg.text.strip()
+    if last_msg.text.strip() == "/single":
+        e_chat, e_id = s_chat, s_id
+        end_link = start_link
+    else:
+        end_link = last_msg.text.strip()
+        e_chat, e_id = parse_telegram_link(end_link)
+        if not e_id:
+            return await last_msg.reply("❌ अमान्य अंतिम लिंक! दोबारा /clone करें।")
 
-    # टारगेट ग्रुप/चैनल लिंक या ID मांगना
     dest_msg = await client.ask(
         user_id,
         "👉 **स्टेप 3:** जहाँ कंटेंट अपलोड करवाना है, उस **चैनल/ग्रुप का लिंक या ID** भेजें:\n"
-        "(बॉट को उस चैनल में एडमिन बनाकर रखें! डिफ़ॉल्ट चैट के लिए `/skip` लिखें)",
+        "(डिफ़ॉल्ट बॉट चैट में पाने के लिए `/skip` लिखें)",
         filters=filters.text,
         timeout=300
     )
     if dest_msg.text == "/cancel":
         return await dest_msg.reply("❌ प्रोसेस रद्द कर दिया गया।")
 
-    target_chat = message.chat.id if dest_msg.text == "/skip" else dest_msg.text.strip()
+    dest_val = dest_msg.text.strip()
+    if dest_val == "/skip":
+        target_chat = user_id
+    else:
+        try:
+            target_chat = int(dest_val)
+        except ValueError:
+            target_chat = dest_val.replace("https://t.me/", "@")
 
-    # डेटा स्टोर करना
     batch_temp.CLONE_DATA[user_id] = {
-        "start_link": start_link,
-        "end_link": end_link,
+        "source_chat": s_chat,
+        "start_id": min(s_id, e_id),
+        "end_id": max(s_id, e_id),
         "target_chat": target_chat,
         "custom_caption": None,
         "extra_caption": None,
@@ -146,19 +202,20 @@ async def clone_command(client: Client, message: Message):
 
 async def show_customization_menu(client: Client, user_id: int):
     data = batch_temp.CLONE_DATA.get(user_id, {})
-    cap_status = "सेट है" if data.get("custom_caption") else "डिफ़ॉल्ट"
-    ext_status = "सेट है" if data.get("extra_caption") else "कोई नहीं"
-    thm_status = "सेट है" if data.get("thumb_path") else "डिफ़ॉल्ट"
+    cap_status = "सेट है ✅" if data.get("custom_caption") else "डिफ़ॉल्ट"
+    ext_status = "सेट है ✅" if data.get("extra_caption") else "कोई नहीं"
+    thm_status = "सेट है ✅" if data.get("thumb_path") else "डिफ़ॉल्ट"
 
     panel_text = (
         "⚙️ **कंटेंट कस्टमाइज़ेशन सेटिंग्स:**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"📝 कस्टम कैप्शन: `{cap_status}`\n"
+        f"📝 नया कैप्शन: `{cap_status}`\n"
         f"➕ अतिरिक्त कैप्शन: `{ext_status}`\n"
-        f"🖼️ कस्टम थंबनेल: `{thm_status}`\n"
+        f"🖼️ थंबनेल: `{thm_status}`\n"
         f"🎯 टारगेट चैट: `{data.get('target_chat')}`\n"
+        f"📊 रेंज: `{data.get('start_id')}` से `{data.get('end_id')}`\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "नीचे दिए गए बटनों से बदलाव करें या ट्रांसफर शुरू करने के लिए **Confirm** दबाएँ:"
+        "नीचे से एडिट करें या तुरंत ट्रांसफर के लिए **🚀 Confirm & Start** दबाएँ:"
     )
 
     buttons = InlineKeyboardMarkup([
@@ -170,7 +227,6 @@ async def show_customization_menu(client: Client, user_id: int):
     ])
     await client.send_message(user_id, panel_text, reply_markup=buttons)
 
-# ----------------- CALLBACK BUTTONS ----------------- #
 @Client.on_callback_query()
 async def callback_handler(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
@@ -181,13 +237,13 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
     if data == "set_caption":
         await query.message.delete()
-        msg = await client.ask(user_id, "✍️ **नया कस्टम कैप्शन भेजें** (यह पुराना कैप्शन बदल देगा):", filters=filters.text, timeout=180)
+        msg = await client.ask(user_id, "✍️ **नया कस्टम कैप्शन भेजें** (यह ओरिजिनल कैप्शन को बदल देगा):", filters=filters.text, timeout=180)
         batch_temp.CLONE_DATA[user_id]["custom_caption"] = msg.text
         await show_customization_menu(client, user_id)
 
     elif data == "set_extra":
         await query.message.delete()
-        msg = await client.ask(user_id, "✍️ **अतिरिक्त कैप्शन (Extra Caption) भेजें** (यह पुराने कैप्शन के नीचे जुड़ेगा):", filters=filters.text, timeout=180)
+        msg = await client.ask(user_id, "✍️ **अतिरिक्त कैप्शन भेजें** (यह पुराने कैप्शन के नीचे जुड़ेगा):", filters=filters.text, timeout=180)
         batch_temp.CLONE_DATA[user_id]["extra_caption"] = msg.text
         await show_customization_menu(client, user_id)
 
@@ -213,15 +269,15 @@ async def callback_handler(client: Client, query: CallbackQuery):
         await query.message.delete()
         await start_clone_task(client, user_id)
 
-# ----------------- EXECUTION FUNCTION ----------------- #
 async def start_clone_task(client: Client, user_id: int):
-    task_info = batch_temp.CLONE_DATA.get(user_id)
-    if not task_info:
+    task = batch_temp.CLONE_DATA.get(user_id)
+    if not task:
         return
 
-    start_link = task_info["start_link"]
-    end_link = task_info["end_link"]
-    target_chat = task_info["target_chat"]
+    source_chat = task["source_chat"]
+    start_id = task["start_id"]
+    end_id = task["end_id"]
+    target_chat = task["target_chat"]
 
     user_session = db.get_session(user_id)
     api_id = int(db.get_api_id(user_id))
@@ -233,12 +289,6 @@ async def start_clone_task(client: Client, user_id: int):
     except Exception as e:
         return await client.send_message(user_id, f"❌ सेशन कनेक्ट एरर: `{e}`")
 
-    # ID एक्सट्रैक्ट करना
-    s_parts = start_link.split("/")
-    e_parts = end_link.split("/")
-    fromID = int(s_parts[-1].replace("?single", "").strip())
-    toID = int(e_parts[-1].replace("?single", "").strip())
-
     batch_temp.IS_BATCH[user_id] = False
     success = 0
     not_found = 0
@@ -246,28 +296,14 @@ async def start_clone_task(client: Client, user_id: int):
     total_bytes = 0
     start_time = time.time()
 
-    status_msg = await client.send_message(user_id, "🚀 **कंटेंट क्लोनिंग शुरू हो गई है...**")
+    status_msg = await client.send_message(user_id, "🚀 **कंटेंट डाउनलोडिंग व अपलोडिंग शुरू...**")
 
-    for msgid in range(fromID, toID + 1):
+    for msgid in range(start_id, end_id + 1):
         if batch_temp.IS_BATCH.get(user_id):
             break
 
         try:
-            if "https://t.me/c/" in start_link:
-                chatid = int("-100" + s_parts[4])
-                ok, sz = await process_media(client, acc, user_id, chatid, msgid, target_chat, task_info)
-            elif "https://t.me/b/" in start_link:
-                username = s_parts[4]
-                ok, sz = await process_media(client, acc, user_id, username, msgid, target_chat, task_info)
-            else:
-                username = s_parts[3]
-                try:
-                    msg = await client.get_messages(username, msgid)
-                    await client.copy_message(target_chat, msg.chat.id, msg.id)
-                    ok, sz = True, (msg.document.file_size if msg.document else (msg.video.file_size if msg.video else 1024))
-                except Exception:
-                    ok, sz = await process_media(client, acc, user_id, username, msgid, target_chat, task_info)
-
+            ok, sz = await process_media(client, acc, user_id, source_chat, msgid, target_chat, task, status_msg)
             if ok:
                 success += 1
                 total_bytes += sz
@@ -284,95 +320,90 @@ async def start_clone_task(client: Client, user_id: int):
         pass
 
     batch_temp.IS_BATCH[user_id] = True
-
-    # थंबनेल डिलीट करना
-    if task_info.get("thumb_path") and os.path.exists(task_info["thumb_path"]):
-        os.remove(task_info["thumb_path"])
+    if task.get("thumb_path") and os.path.exists(task["thumb_path"]):
+        os.remove(task["thumb_path"])
     del batch_temp.CLONE_DATA[user_id]
 
-    # फ़ाइनल समरी रिपोर्ट
     elapsed_time = max(1, int(time.time() - start_time))
-    avg_speed_val = total_bytes / elapsed_time
-    avg_speed = f"{humanbytes(avg_speed_val)}/s"
-    total_size_str = humanbytes(total_bytes)
-    time_str = time_formatter(elapsed_time)
+    avg_speed = f"{humanbytes(total_bytes / elapsed_time)}/s"
 
     summary_card = (
         "🏁 **Transfer Finished**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"✅ Success:         {success}\n"
-        f"🗑️ Not Found:       {not_found} _(deleted/restricted)_\n"
+        f"🗑️ Not Found:       {not_found}\n"
         f"🔁 Retrying:         {retrying}\n"
-        f"📦 Total Size:      {total_size_str}\n"
+        f"📦 Total Size:      {humanbytes(total_bytes)}\n"
         f"⚡ Avg Speed:       {avg_speed}\n"
-        f"⏱️ Time:            {time_str}\n\n"
-        "🔄 *Nothing was skipped — auto-resume continues from the exact last point in ~20s.*"
+        f"⏱️ Time:            {time_formatter(elapsed_time)}\n"
+        "━━━━━━━━━━━━━━━━━━━━"
     )
     await status_msg.edit_text(summary_card)
 
-async def process_media(client: Client, acc: Client, user_id: int, chatid, msgid: int, target_chat, task_info: dict):
+async def process_media(client: Client, acc: Client, user_id: int, source_chat, msgid: int, target_chat, task: dict, status_msg: Message):
     try:
-        msg: Message = await acc.get_messages(chatid, msgid)
+        msg: Message = await acc.get_messages(source_chat, msgid)
         if not msg or msg.empty:
             return False, 0
     except Exception:
         return False, 0
 
-    try:
-        dest_chat = int(target_chat)
-    except Exception:
-        dest_chat = target_chat
-
-    # कैप्शन सेट करना
     final_caption = msg.caption or ""
-    if task_info.get("custom_caption"):
-        final_caption = task_info["custom_caption"]
-    if task_info.get("extra_caption"):
-        final_caption = f"{final_caption}\n\n{task_info['extra_caption']}" if final_caption else task_info["extra_caption"]
+    if task.get("custom_caption"):
+        final_caption = task["custom_caption"]
+    if task.get("extra_caption"):
+        final_caption = f"{final_caption}\n\n{task['extra_caption']}" if final_caption else task["extra_caption"]
 
+    # केवल टेक्स्ट मैसेज होने पर
     if msg.text:
-        text_to_send = task_info.get("custom_caption") or msg.text
-        if task_info.get("extra_caption"):
-            text_to_send += f"\n\n{task_info['extra_caption']}"
-        await client.send_message(dest_chat, text_to_send, entities=msg.entities)
+        text_to_send = task.get("custom_caption") or msg.text
+        if task.get("extra_caption"):
+            text_to_send += f"\n\n{task['extra_caption']}"
+        await client.send_message(target_chat, text_to_send, entities=msg.entities)
         return True, len(text_to_send.encode('utf-8'))
 
-    smsg = await client.send_message(user_id, f"📥 **Downloading Post ID:** `{msgid}`")
-    down_file = f"{user_id}_{msgid}_down.txt"
-    up_file = f"{user_id}_{msgid}_up.txt"
+    # मीडिया डाउनलोड
+    down_start = time.time()
+    await status_msg.edit_text(f"📥 **Downloading ID:** `{msgid}`...")
+    
+    file_path = await acc.download_media(
+        msg,
+        progress=progress_bar,
+        progress_args=(f"📥 Downloading ID: {msgid}", status_msg, down_start)
+    )
 
-    asyncio.create_task(track_status(client, down_file, smsg, "Downloading"))
-    try:
-        file_path = await acc.download_media(msg, progress=progress, progress_args=[smsg, "down"])
-    except Exception:
-        if os.path.exists(down_file): os.remove(down_file)
-        await smsg.delete()
+    if not file_path or not os.path.exists(file_path):
         return False, 0
 
-    if os.path.exists(down_file): os.remove(down_file)
+    size = os.path.getsize(file_path)
+    up_start = time.time()
+    await status_msg.edit_text(f"📤 **Uploading ID:** `{msgid}`...")
 
-    asyncio.create_task(track_status(client, up_file, smsg, "Uploading"))
-    size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
-
-    # कस्टम थंबनेल या ओरिजिनल थंबनेल
-    thumb_to_use = task_info.get("thumb_path")
+    thumb_to_use = task.get("thumb_path")
 
     try:
         if msg.document:
-            await client.send_document(dest_chat, file_path, thumb=thumb_to_use, caption=final_caption, progress=progress, progress_args=[smsg, "up"])
+            await client.send_document(
+                target_chat, file_path, thumb=thumb_to_use, caption=final_caption,
+                progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start)
+            )
         elif msg.video:
-            await client.send_video(dest_chat, file_path, thumb=thumb_to_use, caption=final_caption, duration=msg.video.duration, width=msg.video.width, height=msg.video.height, progress=progress, progress_args=[smsg, "up"])
+            await client.send_video(
+                target_chat, file_path, thumb=thumb_to_use, caption=final_caption,
+                duration=msg.video.duration, width=msg.video.width, height=msg.video.height,
+                progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start)
+            )
         elif msg.audio:
-            await client.send_audio(dest_chat, file_path, thumb=thumb_to_use, caption=final_caption, progress=progress, progress_args=[smsg, "up"])
+            await client.send_audio(
+                target_chat, file_path, thumb=thumb_to_use, caption=final_caption,
+                progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start)
+            )
         elif msg.photo:
-            await client.send_photo(dest_chat, file_path, caption=final_caption)
+            await client.send_photo(target_chat, file_path, caption=final_caption)
         else:
-            await client.send_document(dest_chat, file_path, thumb=thumb_to_use, caption=final_caption)
-    except Exception:
-        pass
+            await client.send_document(target_chat, file_path, thumb=thumb_to_use, caption=final_caption)
     finally:
-        if os.path.exists(up_file): os.remove(up_file)
-        if file_path and os.path.exists(file_path): os.remove(file_path)
-        await smsg.delete()
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
     return True, size
