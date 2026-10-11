@@ -9,6 +9,14 @@ from config import API_ID, API_HASH, ADMINS, CHANNEL_ID, WAITING_TIME
 from db import db
 
 try:
+    from TechVJ.fast_download import fast_download_file
+except ImportError:
+    try:
+        from fast_download import fast_download_file
+    except ImportError:
+        fast_download_file = None
+
+try:
     from TechVJ.strings import HELP_TXT
 except ModuleNotFoundError:
     try:
@@ -41,7 +49,7 @@ def time_formatter(seconds: int) -> str:
         ((str(seconds) + "s") if seconds else "")
     return tmp if tmp else "0s"
 
-# हाई-स्पीड प्रोग्रेस बार (हर 5 सेकंड में एक बार एडिट होगा ताकि टेलीग्राम स्पीड लॉक न करे)
+# हाई-स्पीड प्रोग्रेस बार
 async def progress_bar(current, total, ud_type, message, start, fname=""):
     now = time.time()
     diff = now - start
@@ -308,7 +316,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         await query.message.delete()
         await start_clone_task(client, user_id)
 
-# ----------------- EXECUTION (HIGH SPEED WORKERS) ----------------- #
+# ----------------- EXECUTION FUNCTION ----------------- #
 async def start_clone_task(client: Client, user_id: int):
     task = batch_temp.CLONE_DATA.get(user_id)
     if not task:
@@ -326,7 +334,6 @@ async def start_clone_task(client: Client, user_id: int):
     user_api_id = int(db.get_api_id(user_id) or API_ID)
     user_api_hash = db.get_api_hash(user_id) or API_HASH
 
-    # 150 Workers और 10 Concurrent Channels से सुपरफास्ट स्पीड
     acc = Client(
         f"user_session_{user_id}", 
         session_string=user_session, 
@@ -400,7 +407,7 @@ def get_file_name_from_msg(msg: Message) -> str:
         return msg.video.file_name
     elif msg.audio and msg.audio.file_name:
         return msg.audio.file_name
-    return "Media File"
+    return f"media_{msg.id}.mp4"
 
 async def process_media(client: Client, acc: Client, user_id: int, source_chat, msgid: int, target_chat, task: dict, status_msg: Message):
     try:
@@ -439,15 +446,25 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         return True, len(text_to_send.encode('utf-8'))
 
     file_name = get_file_name_from_msg(msg)
+    down_path = os.path.join("downloads", f"{msgid}_{file_name}")
+    os.makedirs("downloads", exist_ok=True)
 
     down_start = time.time()
     await status_msg.edit_text(f"📥 **Downloading ID:** `{msgid}`\n📁 **File:** `{file_name}`...")
     
-    file_path = await acc.download_media(
-        msg,
-        progress=progress_bar,
-        progress_args=(f"📥 Downloading ID: {msgid}", status_msg, down_start, file_name)
-    )
+    # 1 MB स्ट्रीमिंग चंक्स डाउनलोडर
+    if fast_download_file:
+        file_path = await fast_download_file(
+            acc, msg, down_path,
+            progress_func=progress_bar,
+            progress_args=("📥 Downloading ID: " + str(msgid), status_msg, down_start, file_name)
+        )
+    else:
+        file_path = await acc.download_media(
+            msg, file_name=down_path,
+            progress=progress_bar,
+            progress_args=(f"📥 Downloading ID: {msgid}", status_msg, down_start, file_name)
+        )
 
     if not file_path or not os.path.exists(file_path):
         return False, 0
