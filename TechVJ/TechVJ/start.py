@@ -5,8 +5,6 @@ import math
 import re
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from pyrogram.raw.functions.upload import GetFile
-from pyrogram.raw.types import InputDocumentFileLocation, InputPhotoFileLocation
 from config import API_ID, API_HASH, ADMINS, CHANNEL_ID, WAITING_TIME
 from db import db
 
@@ -47,7 +45,7 @@ def time_formatter(seconds: int) -> str:
 async def progress_bar(current, total, ud_type, message, start, fname=""):
     now = time.time()
     diff = now - start
-    if round(diff % 5.00) == 0 or current == total:
+    if round(diff % 4.00) == 0 or current == total:
         percentage = current * 100 / total if total > 0 else 0
         speed = current / diff if diff > 0 else 0
         elapsed_time = round(diff)
@@ -75,84 +73,6 @@ async def progress_bar(current, total, ud_type, message, start, fname=""):
         except Exception:
             pass
 
-# ----------------- डायरेक्ट हाई-स्पीड डाउनलोडर ----------------- #
-CHUNK_SIZE = 1024 * 1024  # 1 MB Chunk
-PARALLEL_CONNECTIONS = 8   # 8 पैरेलल थ्रेड्स
-
-async def fetch_chunk(client: Client, location, offset: int, limit: int):
-    for _ in range(3):
-        try:
-            res = await client.invoke(
-                GetFile(location=location, offset=offset, limit=limit, precise=True)
-            )
-            return res.bytes
-        except Exception:
-            await asyncio.sleep(0.5)
-    return b""
-
-async def direct_fast_download(client: Client, msg: Message, out_path: str, progress_func, progress_args):
-    media = msg.document or msg.video or msg.audio or msg.photo
-    if not media:
-        return None
-
-    file_size = getattr(media, "file_size", 0)
-    if not file_size or file_size < 10 * 1024 * 1024:
-        return await client.download_media(msg, file_name=out_path)
-
-    if msg.photo:
-        photo = msg.photo
-        location = InputPhotoFileLocation(
-            id=photo.file_id,
-            access_hash=photo.file_unique_id,
-            file_reference=photo.file_reference,
-            thumb_size=""
-        )
-    else:
-        location = InputDocumentFileLocation(
-            id=media.file_id,
-            access_hash=media.file_unique_id,
-            file_reference=media.file_reference,
-            thumb_size=""
-        )
-
-    total_chunks = math.ceil(file_size / CHUNK_SIZE)
-    chunks_dict = {}
-    downloaded_bytes = 0
-    queue = asyncio.Queue()
-
-    for i in range(total_chunks):
-        queue.put_nowait(i)
-
-    async def worker():
-        nonlocal downloaded_bytes
-        while not queue.empty():
-            part_id = await queue.get()
-            offset = part_id * CHUNK_SIZE
-            limit = min(CHUNK_SIZE, file_size - offset)
-            data = await fetch_chunk(client, location, offset, limit)
-            chunks_dict[part_id] = data
-            downloaded_bytes += len(data)
-            if progress_func:
-                try:
-                    await progress_func(downloaded_bytes, file_size, *progress_args)
-                except Exception:
-                    pass
-            queue.task_done()
-
-    workers = [asyncio.create_task(worker()) for _ in range(PARALLEL_CONNECTIONS)]
-    await asyncio.gather(*workers)
-
-    with open(out_path, "wb") as f:
-        for i in range(total_chunks):
-            if i in chunks_dict:
-                f.write(chunks_dict[i])
-            else:
-                return await client.download_media(msg, file_name=out_path)
-
-    chunks_dict.clear()
-    return out_path
-
-# ----------------- COMMANDS ----------------- #
 @Client.on_message(filters.command("id"))
 async def get_id(client: Client, message: Message):
     chat_id = message.chat.id
@@ -366,13 +286,18 @@ async def start_clone_task(client: Client, user_id: int):
         api_hash=user_api_hash, 
         api_id=user_api_id, 
         in_memory=True,
-        workers=150,
-        max_concurrent_transmissions=10
+        workers=100
     )
     try:
         await acc.start()
     except Exception as e:
         return await client.send_message(user_id, f"❌ सेशन कनेक्ट एरर: `{e}`")
+
+    # ऑटो-जॉइन / पीयर रिज़ॉल्व (ताकि पब्लिक या प्राइवेट दोनों में कभी एरर न आए)
+    try:
+        await acc.join_chat(source_chat)
+    except Exception:
+        pass
 
     batch_temp.IS_BATCH[user_id] = False
     success = 0
@@ -381,7 +306,7 @@ async def start_clone_task(client: Client, user_id: int):
     total_bytes = 0
     start_time = time.time()
 
-    status_msg = await client.send_message(user_id, "🚀 **हाई-स्पीड ट्रांसफर शुरू हो रहा है...**")
+    status_msg = await client.send_message(user_id, "🚀 **कंटेंट ट्रांसफर शुरू हो रहा है...**")
 
     for msgid in range(start_id, end_id + 1):
         if batch_temp.IS_BATCH.get(user_id):
@@ -393,8 +318,9 @@ async def start_clone_task(client: Client, user_id: int):
                 total_bytes += sz
             else:
                 not_found += 1
-        except Exception:
+        except Exception as e:
             retrying += 1
+            print(f"Error transferring message {msgid}: {e}")
 
         await asyncio.sleep(WAITING_TIME)
 
@@ -431,14 +357,19 @@ def get_file_name_from_msg(msg: Message) -> str:
         return msg.video.file_name
     elif msg.audio and msg.audio.file_name:
         return msg.audio.file_name
-    return f"media_{msg.id}.mp4"
+    return f"file_{msg.id}.mp4"
 
 async def process_media(client: Client, acc: Client, user_id: int, source_chat, msgid: int, target_chat, task: dict, status_msg: Message):
+    msg = None
     try:
-        msg: Message = await acc.get_messages(source_chat, msgid)
-        if not msg or msg.empty:
-            return False, 0
+        msg = await acc.get_messages(source_chat, msgid)
     except Exception:
+        try:
+            msg = await client.get_messages(source_chat, msgid)
+        except Exception:
+            return False, 0
+
+    if not msg or msg.empty:
         return False, 0
 
     final_caption = msg.caption or ""
@@ -453,6 +384,7 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     if task.get("extra_caption"):
         final_caption = f"{final_caption}\n\n{task['extra_caption']}" if final_caption else task["extra_caption"]
 
+    # यदि सिर्फ टेक्स्ट मैसेज हो
     if msg.text:
         text_to_send = msg.text
         if task.get("custom_caption"):
@@ -473,10 +405,11 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     down_start = time.time()
     await status_msg.edit_text(f"📥 **Downloading ID:** `{msgid}`\n📁 **File:** `{file_name}`...")
 
-    # सीधे इनबिल्ट 8-पैरेलल कनेक्शन से डाउनलोड
-    file_path = await direct_fast_download(
-        acc, msg, down_path,
-        progress_func=progress_bar,
+    # सुरक्षित डाउनलोडिंग
+    file_path = await acc.download_media(
+        msg,
+        file_name=down_path,
+        progress=progress_bar,
         progress_args=("📥 Downloading ID: " + str(msgid), status_msg, down_start, file_name)
     )
 
