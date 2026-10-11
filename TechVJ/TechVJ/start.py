@@ -7,7 +7,15 @@ from pyrogram.errors import FloodWait, UserAlreadyParticipant, InviteHashExpired
 from pyrogram.types import Message 
 from config import ADMINS, CHANNEL_ID, WAITING_TIME
 from db import db
-from TechVJ.strings import HELP_TXT
+
+# सुरक्षित इम्पोर्ट ताकि ModuleNotFoundError न आए
+try:
+    from TechVJ.strings import HELP_TXT
+except ModuleNotFoundError:
+    try:
+        from strings import HELP_TXT
+    except ImportError:
+        HELP_TXT = "🌟 **SACHIN SHARMA सेव रेस्ट्रिक्टेड बॉट**\n\nकंटेंट डाउनलोड करने के लिए पोस्ट का लिंक भेजें।"
 
 class batch_temp(object):
     IS_BATCH = {}
@@ -65,7 +73,7 @@ async def save(client: Client, message: Message):
     if message.text.startswith("/"):
         return
 
-    # वीआईपी प्लान सुरक्षा जांच
+    # वीआईपी प्लान जांच
     if not db.is_user_vip(user_id, ADMINS):
         return await message.reply_text(
             "🔒 **यह फीचर केवल एक्टिव पेड मेंबर्स के लिए है!**\n\n"
@@ -78,7 +86,7 @@ async def save(client: Client, message: Message):
         return
 
     if batch_temp.IS_BATCH.get(user_id) == False:
-        return await message.reply_text("⚠️ एक टास्क पहले से चल रहा है। कृपया उसके पूरा होने का इंतज़ार करें या /cancel करें।")
+        return await message.reply_text("⚠️ एक टास्क पहले से चल रहा है। कृपया पूरा होने का इंतज़ार करें या /cancel करें।")
 
     # लॉगिन सेशन प्राप्त करें
     user_session = db.get_session(user_id)
@@ -139,7 +147,7 @@ async def save(client: Client, message: Message):
             else:
                 not_found += 1
 
-        except Exception as e:
+        except Exception:
             retrying += 1
 
         await asyncio.sleep(WAITING_TIME)
@@ -181,7 +189,6 @@ async def process_media(client: Client, acc: Client, message: Message, chatid, m
 
     dest_chat = int(CHANNEL_ID) if CHANNEL_ID else message.chat.id
 
-    # टेक्स्ट संदेश
     if msg.text:
         await client.send_message(dest_chat, msg.text, entities=msg.entities)
         return True, len(msg.text.encode('utf-8'))
@@ -223,4 +230,3 @@ async def process_media(client: Client, acc: Client, message: Message, chatid, m
         await smsg.delete()
 
     return True, size
-  
