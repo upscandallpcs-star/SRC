@@ -16,19 +16,7 @@ except ModuleNotFoundError:
     try:
         from strings import HELP_TXT
     except ImportError:
-        HELP_TXT = (
-            "📚 **User Guide & Commands**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "**कमांड्स:**\n"
-            "/start - बॉट शुरू करें\n"
-            "/clone - कंटेंट ट्रांसफर करें\n"
-            "/cancel - प्रोसेस रद्द करें\n"
-            "/login - टेलीग्राम अकाउंट जोड़ें\n"
-            "/logout - अकाउंट हटाएं\n"
-            "/id - चैट व अपनी ID देखें\n"
-            "/help - सहायता निर्देश देखें\n\n"
-            "VIP Access व सहायता के लिए संपर्क करें: @Avigat1210"
-        )
+        HELP_TXT = "📚 **User Guide:** /help\nAdmin: @Avigat1210"
 
 class batch_temp(object):
     IS_BATCH = {}
@@ -55,11 +43,11 @@ def time_formatter(seconds: int) -> str:
         ((str(seconds) + "s") if seconds else "")
     return tmp if tmp else "0s"
 
-# सुरक्षित लाइव प्रोग्रेस बार (प्रति 60 सेकंड में अपडेट)
+# लाइव प्रोग्रेस बार (हर 12 सेकंड में स्मूथ अपडेट)
 async def progress_bar(current, total, ud_type, message, start, fname=""):
     now = time.time()
     diff = now - start
-    if round(diff % 60.00) == 0 or current == total:
+    if round(diff % 12.00) == 0 or current == total:
         percentage = current * 100 / total if total > 0 else 0
         speed = current / diff if diff > 0 else 0
         elapsed_time = round(diff)
@@ -87,7 +75,7 @@ async def progress_bar(current, total, ud_type, message, start, fname=""):
         except Exception:
             pass
 
-# वीडियो से ऑटो-थंबनेल तैयार करना ताकि काली स्क्रीन न आए
+# वीडियो से ऑटो-थंबनेल तैयार करना
 def generate_auto_thumb(video_path: str, thumb_path: str):
     try:
         cmd = [
@@ -223,9 +211,7 @@ async def clone_command(client: Client, message: Message):
         "end_id": max(s_id, e_id),
         "target_chat": target_chat,
         "custom_caption": None,
-        "custom_entities": None,
         "extra_caption": None,
-        "extra_entities": None,
         "replace_find": None,
         "replace_with": None,
         "thumb_path": None
@@ -270,26 +256,25 @@ async def callback_handler(client: Client, query: CallbackQuery):
     data = query.data
     if data == "set_caption":
         await query.message.delete()
-        msg = await client.ask(user_id, "✍️ **नया कस्टम कैप्शन भेजें** (हाइपरलिंक व फॉर्मेटिंग सुरक्षित रहेंगे):", filters=filters.text, timeout=180)
-        batch_temp.CLONE_DATA[user_id]["custom_caption"] = msg.text
-        batch_temp.CLONE_DATA[user_id]["custom_entities"] = msg.entities
+        msg = await client.ask(user_id, "✍️ **नया कस्टम कैप्शन भेजें** (हाइपरलिंक व फॉर्मेटिंग मान्य है):", filters=filters.text, timeout=180)
+        # Markdown प्रारूप को सुरक्षित रखना
+        batch_temp.CLONE_DATA[user_id]["custom_caption"] = msg.text.markdown
         await show_customization_menu(client, user_id)
     elif data == "set_replace":
         await query.message.delete()
         find_msg = await client.ask(user_id, "🔍 क्या खोजना/हटाना चाहते हैं? वह शब्द भेजें:", filters=filters.text, timeout=180)
         if find_msg.text == "/cancel":
             return await show_customization_menu(client, user_id)
-        with_msg = await client.ask(user_id, f"✏️ `{find_msg.text}` की जगह क्या लगाना चाहते हैं? (खाली रखने के लिए `/empty`):", filters=filters.text, timeout=180)
+        with_msg = await client.ask(user_id, f"✏️ `{find_msg.text}` की जगह क्या लगाना चाहते हैं? (हाइपरलिंक भी भेज सकते हैं, खाली रखने के लिए `/empty`):", filters=filters.text, timeout=180)
         if with_msg.text == "/cancel":
             return await show_customization_menu(client, user_id)
         batch_temp.CLONE_DATA[user_id]["replace_find"] = find_msg.text
-        batch_temp.CLONE_DATA[user_id]["replace_with"] = "" if with_msg.text.strip() == "/empty" else with_msg.text
+        batch_temp.CLONE_DATA[user_id]["replace_with"] = "" if with_msg.text.strip() == "/empty" else with_msg.text.markdown
         await show_customization_menu(client, user_id)
     elif data == "set_extra":
         await query.message.delete()
-        msg = await client.ask(user_id, "✍️ **अतिरिक्त कैप्शन भेजें** (लिंक्स व टेक्स्ट मर्ज हो जाएंगे):", filters=filters.text, timeout=180)
-        batch_temp.CLONE_DATA[user_id]["extra_caption"] = msg.text
-        batch_temp.CLONE_DATA[user_id]["extra_entities"] = msg.entities
+        msg = await client.ask(user_id, "✍️ **अतिरिक्त कैप्शन भेजें** (हाइपरलिंक्स मान्य हैं):", filters=filters.text, timeout=180)
+        batch_temp.CLONE_DATA[user_id]["extra_caption"] = msg.text.markdown
         await show_customization_menu(client, user_id)
     elif data == "set_thumb":
         await query.message.delete()
@@ -303,9 +288,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         await show_customization_menu(client, user_id)
     elif data == "clear_settings":
         batch_temp.CLONE_DATA[user_id]["custom_caption"] = None
-        batch_temp.CLONE_DATA[user_id]["custom_entities"] = None
         batch_temp.CLONE_DATA[user_id]["extra_caption"] = None
-        batch_temp.CLONE_DATA[user_id]["extra_entities"] = None
         batch_temp.CLONE_DATA[user_id]["replace_find"] = None
         batch_temp.CLONE_DATA[user_id]["replace_with"] = None
         tpath = batch_temp.CLONE_DATA[user_id].get("thumb_path")
@@ -364,7 +347,6 @@ async def start_clone_task(client: Client, user_id: int):
         if batch_temp.IS_BATCH.get(user_id):
             break
 
-        # ऑटो-रिज्यूम और FloodWait प्रोटेक्शन लूप
         attempts = 0
         while attempts < 5:
             try:
@@ -376,7 +358,7 @@ async def start_clone_task(client: Client, user_id: int):
                     not_found += 1
                 break
             except FloodWait as fw:
-                await status_msg.edit_text(f"⏳ **Telegram Rate-limit:** {fw.value} सेकंड इंतज़ार कर रहे हैं... (ऑटो-रिज्यूम होगा)")
+                await status_msg.edit_text(f"⏳ **Rate-limit:** {fw.value} सेकंड इंतज़ार कर रहे हैं... (ऑटो-रिज्यूम होगा)")
                 await asyncio.sleep(fw.value + 2)
                 attempts += 1
             except RPCError as rpc:
@@ -439,13 +421,11 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     if not msg or msg.empty:
         return False, 0
 
-    # कैप्शन व लिंक (Entities) हैंडलिंग
-    final_caption = msg.caption or ""
-    final_entities = msg.caption_entities or []
+    # Markdown लिंक और फॉर्मेटिंग सुरक्षित रखना
+    final_caption = msg.caption.markdown if msg.caption else ""
 
     if task.get("custom_caption"):
         final_caption = task["custom_caption"]
-        final_entities = task.get("custom_entities") or []
     elif task.get("replace_find"):
         find_w = task["replace_find"]
         with_w = task.get("replace_with") or ""
@@ -457,22 +437,19 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
             final_caption = f"{final_caption}\n\n{task['extra_caption']}"
         else:
             final_caption = task["extra_caption"]
-            final_entities = task.get("extra_entities") or []
 
-    # अगर केवल टेक्स्ट मैसेज हो
+    # टेक्स्ट मैसेज ट्रांसफर
     if msg.text:
-        text_to_send = msg.text
-        text_entities = msg.entities or []
+        text_to_send = msg.text.markdown
         if task.get("custom_caption"):
             text_to_send = task["custom_caption"]
-            text_entities = task.get("custom_entities") or []
         elif task.get("replace_find"):
             find_w = task["replace_find"]
             with_w = task.get("replace_with") or ""
             text_to_send = text_to_send.replace(find_w, with_w)
         if task.get("extra_caption"):
             text_to_send += f"\n\n{task['extra_caption']}"
-        await client.send_message(target_chat, text_to_send, entities=text_entities)
+        await client.send_message(target_chat, text_to_send, parse_mode=enums.ParseMode.MARKDOWN)
         return True, len(text_to_send.encode('utf-8'))
 
     file_name = get_file_name_from_msg(msg)
@@ -497,7 +474,6 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     up_start = time.time()
     await status_msg.edit_text(f"📤 **Uploading ID:** `{msgid}`\n📁 **File:** `{file_name}`...")
 
-    # थंबनेल चयन (कस्टम यूज़र थंबनेल या ऑटो-थंबनेल)
     thumb_to_use = task.get("thumb_path")
     created_temp_thumb = None
 
@@ -509,24 +485,24 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     try:
         if msg.document:
             await client.send_document(
-                target_chat, file_path, thumb=thumb_to_use, caption=final_caption, caption_entities=final_entities,
+                target_chat, file_path, thumb=thumb_to_use, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN,
                 progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start, file_name)
             )
         elif msg.video:
             await client.send_video(
-                target_chat, file_path, thumb=thumb_to_use, caption=final_caption, caption_entities=final_entities,
+                target_chat, file_path, thumb=thumb_to_use, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN,
                 duration=msg.video.duration or 0, width=msg.video.width or 0, height=msg.video.height or 0,
                 progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start, file_name)
             )
         elif msg.audio:
             await client.send_audio(
-                target_chat, file_path, thumb=thumb_to_use, caption=final_caption, caption_entities=final_entities,
+                target_chat, file_path, thumb=thumb_to_use, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN,
                 progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start, file_name)
             )
         elif msg.photo:
-            await client.send_photo(target_chat, file_path, caption=final_caption, caption_entities=final_entities)
+            await client.send_photo(target_chat, file_path, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN)
         else:
-            await client.send_document(target_chat, file_path, thumb=thumb_to_use, caption=final_caption, caption_entities=final_entities)
+            await client.send_document(target_chat, file_path, thumb=thumb_to_use, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN)
     except Exception as e:
         print(f"Upload error: {e}")
         return False, 0
