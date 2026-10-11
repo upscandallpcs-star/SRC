@@ -6,11 +6,8 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from config import API_ID, API_HASH, BOT_TOKEN, ADMINS, OWNER_HANDLE, SUPPORT_GROUP
 from db import db
 
-# Pyromod सपोर्ट ताकि ask() मेथड सही से चले
-try:
-    import pyromod
-except ImportError:
-    pass
+# pyromod इम्पोर्ट ताकि ask() बिना एरर के चले
+import pyromod
 
 class Bot(Client):
     def __init__(self):
@@ -28,7 +25,6 @@ class Bot(Client):
         await super().start()
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         print("SACHIN SHARMA Bot Started Successfully!")
-        print("Database: Connected to Supabase")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     async def stop(self, *args):
@@ -74,6 +70,7 @@ async def start_command(client: Client, message: Message):
         f"⚠️ **नोट:** यह एक प्राइवेट बॉट है। इसे इस्तेमाल करने के लिए आपके पास एक्टिव पेड प्लान होना ज़रूरी है।\n\n"
         f"🔹 प्लान देखने के लिए: /plans\n"
         f"🔹 अकाउंट जोड़ने के लिए: /login\n"
+        f"🔹 कंटेंट डाउनलोड करने के लिए: /clone\n"
         f"🔹 मदद के लिए: /help"
     )
     buttons = InlineKeyboardMarkup([
@@ -180,12 +177,11 @@ async def remove_user_admin(client: Client, message: Message):
     except Exception as e:
         await message.reply_text(f"Error: {e}")
 
-# ----------------- MAIN RUNNER WITH EVENT LOOP FIX ----------------- #
+# ----------------- MAIN RUNNER ----------------- #
+async def main():
+    await bot.start()
+    print("Bot is fully running!")
+    await asyncio.Event().wait()
+
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    bot.run()
+    asyncio.run(main())
