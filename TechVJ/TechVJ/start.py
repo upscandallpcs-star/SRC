@@ -280,20 +280,21 @@ async def start_clone_task(client: Client, user_id: int):
     user_api_id = int(db.get_api_id(user_id) or API_ID)
     user_api_hash = db.get_api_hash(user_id) or API_HASH
 
+    # 150 Workers और 16 Concurrent Transmissions
     acc = Client(
         f"user_session_{user_id}", 
         session_string=user_session, 
         api_hash=user_api_hash, 
         api_id=user_api_id, 
         in_memory=True,
-        workers=100
+        workers=150,
+        max_concurrent_transmissions=16
     )
     try:
         await acc.start()
     except Exception as e:
         return await client.send_message(user_id, f"❌ सेशन कनेक्ट एरर: `{e}`")
 
-    # ऑटो-जॉइन / पीयर रिज़ॉल्व (ताकि पब्लिक या प्राइवेट दोनों में कभी एरर न आए)
     try:
         await acc.join_chat(source_chat)
     except Exception:
@@ -359,6 +360,28 @@ def get_file_name_from_msg(msg: Message) -> str:
         return msg.audio.file_name
     return f"file_{msg.id}.mp4"
 
+# हाई-स्पीड चंक बफ़र डाउनलोडर
+async def turbo_download(acc: Client, msg: Message, out_path: str, progress_func, progress_args):
+    media = msg.document or msg.video or msg.audio or msg.photo
+    total_size = getattr(media, "file_size", 0) if media else 0
+
+    try:
+        current = 0
+        with open(out_path, "wb") as f:
+            # stream_media बिना किसी file_reference एरर के डायरेक्ट चंक्स खींचता है
+            async for chunk in acc.stream_media(msg, limit=0):
+                f.write(chunk)
+                current += len(chunk)
+                if progress_func:
+                    try:
+                        await progress_func(current, total_size, *progress_args)
+                    except Exception:
+                        pass
+        return out_path
+    except Exception as e:
+        print(f"Turbo download fallback: {e}")
+        return await acc.download_media(msg, file_name=out_path)
+
 async def process_media(client: Client, acc: Client, user_id: int, source_chat, msgid: int, target_chat, task: dict, status_msg: Message):
     msg = None
     try:
@@ -384,7 +407,6 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     if task.get("extra_caption"):
         final_caption = f"{final_caption}\n\n{task['extra_caption']}" if final_caption else task["extra_caption"]
 
-    # यदि सिर्फ टेक्स्ट मैसेज हो
     if msg.text:
         text_to_send = msg.text
         if task.get("custom_caption"):
@@ -405,11 +427,10 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     down_start = time.time()
     await status_msg.edit_text(f"📥 **Downloading ID:** `{msgid}`\n📁 **File:** `{file_name}`...")
 
-    # सुरक्षित डाउनलोडिंग
-    file_path = await acc.download_media(
-        msg,
-        file_name=down_path,
-        progress=progress_bar,
+    # टर्बो डाउनलोडर
+    file_path = await turbo_download(
+        acc, msg, down_path,
+        progress_func=progress_bar,
         progress_args=("📥 Downloading ID: " + str(msgid), status_msg, down_start, file_name)
     )
 
