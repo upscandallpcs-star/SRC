@@ -16,7 +16,19 @@ except ModuleNotFoundError:
     try:
         from strings import HELP_TXT
     except ImportError:
-        HELP_TXT = "🌟 **सेव रेस्ट्रिक्टेड बॉट**\n\nकंटेंट डाउनलोड करने के लिए /clone कमांड भेजें।"
+        HELP_TXT = (
+            "📚 **User Guide & Commands**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "**कमांड्स:**\n"
+            "/start - बॉट शुरू करें\n"
+            "/clone - कंटेंट ट्रांसफर करें\n"
+            "/cancel - प्रोसेस रद्द करें\n"
+            "/login - टेलीग्राम अकाउंट जोड़ें\n"
+            "/logout - अकाउंट हटाएं\n"
+            "/id - चैट व अपनी ID देखें\n"
+            "/help - सहायता निर्देश देखें\n\n"
+            "VIP Access व सहायता के लिए संपर्क करें: @Avigat1210"
+        )
 
 class batch_temp(object):
     IS_BATCH = {}
@@ -43,7 +55,7 @@ def time_formatter(seconds: int) -> str:
         ((str(seconds) + "s") if seconds else "")
     return tmp if tmp else "0s"
 
-# 1 मिनट (60 सेकंड) में अपडेट होने वाला सुरक्षित प्रोग्रेस बार
+# सुरक्षित लाइव प्रोग्रेस बार (प्रति 60 सेकंड में अपडेट)
 async def progress_bar(current, total, ud_type, message, start, fname=""):
     now = time.time()
     diff = now - start
@@ -75,7 +87,7 @@ async def progress_bar(current, total, ud_type, message, start, fname=""):
         except Exception:
             pass
 
-# वीडियो से ऑटो-थंबनेल बनाने का फंक्शन ताकि काली स्क्रीन न आए
+# वीडियो से ऑटो-थंबनेल तैयार करना ताकि काली स्क्रीन न आए
 def generate_auto_thumb(video_path: str, thumb_path: str):
     try:
         cmd = [
@@ -117,7 +129,8 @@ async def send_start(client: Client, message: Message):
         "✅ Topics/Threads groups supported\n"
         "✅ 2GB+ files · Custom caption & link entities editing\n"
         "✅ Custom transfer thumbnail support\n\n"
-        "Access lene ke liye admin se sampark karein ya /help dekhein."
+        "Access lene ke liye admin se sampark karein: @Avigat1210\n"
+        "Puri guide dekhne ke liye /help send karein."
     )
     await message.reply_text(welcome_text)
 
@@ -146,7 +159,7 @@ def parse_telegram_link(link: str):
 async def clone_command(client: Client, message: Message):
     user_id = message.from_user.id
     if not db.is_user_vip(user_id, ADMINS):
-        return await message.reply_text("🔒 **यह फीचर केवल एक्टिव वीआईपी मेंबर्स के लिए है!**\nएक्सेस के लिए एडमिन से संपर्क करें।")
+        return await message.reply_text("🔒 **यह फीचर केवल एक्टिव वीआईपी मेंबर्स के लिए है!**\n\nAccess lene ke liye admin se sampark karein: @Avigat1210")
     if batch_temp.IS_BATCH.get(user_id) == False:
         return await message.reply_text("⚠️ आपका एक टास्क पहले से चल रहा है। इंतज़ार करें या /cancel करें।")
 
@@ -257,13 +270,13 @@ async def callback_handler(client: Client, query: CallbackQuery):
     data = query.data
     if data == "set_caption":
         await query.message.delete()
-        msg = await client.ask(user_id, "✍️ **नया कस्टम कैप्शन भेजें** (फॉर्मेटिंग व लिंक सुरक्षित रहेंगे):", filters=filters.text, timeout=180)
+        msg = await client.ask(user_id, "✍️ **नया कस्टम कैप्शन भेजें** (हाइपरलिंक व फॉर्मेटिंग सुरक्षित रहेंगे):", filters=filters.text, timeout=180)
         batch_temp.CLONE_DATA[user_id]["custom_caption"] = msg.text
         batch_temp.CLONE_DATA[user_id]["custom_entities"] = msg.entities
         await show_customization_menu(client, user_id)
     elif data == "set_replace":
         await query.message.delete()
-        find_msg = await client.ask(user_id, "🔍 क्या खोजना/हटाना चाहते हैं? वह शब्द/टेक्स्ट भेजें:", filters=filters.text, timeout=180)
+        find_msg = await client.ask(user_id, "🔍 क्या खोजना/हटाना चाहते हैं? वह शब्द भेजें:", filters=filters.text, timeout=180)
         if find_msg.text == "/cancel":
             return await show_customization_menu(client, user_id)
         with_msg = await client.ask(user_id, f"✏️ `{find_msg.text}` की जगह क्या लगाना चाहते हैं? (खाली रखने के लिए `/empty`):", filters=filters.text, timeout=180)
@@ -286,7 +299,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         thumb_file = os.path.join(user_thumb_dir, "thumb.jpg")
         await client.download_media(msg.photo, file_name=thumb_file)
         batch_temp.CLONE_DATA[user_id]["thumb_path"] = thumb_file
-        await msg.reply_text("✅ थंबनेल सुरक्षित सेव कर लिया गया!")
+        await msg.reply_text("✅ आपका थंबनेल सुरक्षित सेव कर लिया गया!")
         await show_customization_menu(client, user_id)
     elif data == "clear_settings":
         batch_temp.CLONE_DATA[user_id]["custom_caption"] = None
