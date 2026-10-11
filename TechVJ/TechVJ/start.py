@@ -5,7 +5,7 @@ import math
 import re
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from config import ADMINS, CHANNEL_ID, WAITING_TIME
+from config import API_ID, API_HASH, ADMINS, CHANNEL_ID, WAITING_TIME
 from db import db
 
 try:
@@ -286,19 +286,18 @@ async def start_clone_task(client: Client, user_id: int):
     target_chat = task["target_chat"]
 
     user_session = db.get_session(user_id)
-    raw_api_id = db.get_api_id(user_id)
-    api_hash = db.get_api_hash(user_id)
+    if not user_session:
+        return await client.send_message(user_id, "❌ आपका लॉगिन सेशन नहीं मिला। कृपया पहले /login करें।")
 
-    if not user_session or not raw_api_id or not api_hash:
-        return await client.send_message(user_id, "❌ आपका लॉगिन डेटा नहीं मिला। कृपया पहले /login करें।")
+    # config से सीधा API_ID और API_HASH लिया गया ताकि कभी 'लॉगिन डेटा नहीं मिला' एरर न आए
+    user_api_id = int(db.get_api_id(user_id) or API_ID)
+    user_api_hash = db.get_api_hash(user_id) or API_HASH
 
-    api_id = int(raw_api_id)
-
-    acc = Client(f"user_session_{user_id}", session_string=user_session, api_hash=api_hash, api_id=api_id, in_memory=True)
+    acc = Client(f"user_session_{user_id}", session_string=user_session, api_hash=user_api_hash, api_id=user_api_id, in_memory=True)
     try:
         await acc.start()
     except Exception as e:
-        return await client.send_message(user_id, f"❌ यूजर सेशन शुरू करने में एरर: `{e}`\nकृपया /logout करके दोबारा /login करें।")
+        return await client.send_message(user_id, f"❌ सेशन कनेक्ट एरर: `{e}`\nकृपया /logout करके दोबारा /login करें।")
 
     batch_temp.IS_BATCH[user_id] = False
     success = 0
