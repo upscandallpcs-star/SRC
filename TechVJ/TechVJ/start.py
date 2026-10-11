@@ -2,6 +2,7 @@ import os
 import asyncio 
 import time
 import math
+import re
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import ADMINS, CHANNEL_ID, WAITING_TIME
@@ -40,12 +41,12 @@ def time_formatter(seconds: int) -> str:
         ((str(seconds) + "s") if seconds else "")
     return tmp if tmp else "0s"
 
-# लाइव प्रोग्रेस बार (प्रतिशत, स्पीड, ETA)
+# सुरक्षित लाइव प्रोग्रेस बार
 async def progress_bar(current, total, ud_type, message, start):
     now = time.time()
     diff = now - start
     if round(diff % 4.00) == 0 or current == total:
-        percentage = current * 100 / total
+        percentage = current * 100 / total if total > 0 else 0
         speed = current / diff if diff > 0 else 0
         elapsed_time = round(diff)
         eta = round((total - current) / speed) if speed > 0 else 0
@@ -54,7 +55,7 @@ async def progress_bar(current, total, ud_type, message, start):
         eta_str = time_formatter(eta)
 
         bar_length = 10
-        filled_length = int(bar_length * current // total)
+        filled_length = int(bar_length * current // total) if total > 0 else 0
         bar = '▰' * filled_length + '▱' * (bar_length - filled_length)
 
         status_text = (
@@ -69,19 +70,20 @@ async def progress_bar(current, total, ud_type, message, start):
         except Exception:
             pass
 
-# हर जगह काम करने वाला /id कमांड
 @Client.on_message(filters.command("id"))
 async def get_id(client: Client, message: Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else "Unknown")
+    response = f"📍 **चैट/ग्रुप ID:** `{chat_id}`\n👤 **आपकी ID:** `{user_id}`"
+    
     if message.reply_to_message:
-        text = f"👤 **User ID:** `{message.reply_to_message.from_user.id}`\n"
-        if message.reply_to_message.sender_chat:
-            text += f"📢 **Channel/Group ID:** `{message.reply_to_message.sender_chat.id}`\n"
-        if message.reply_to_message.forward_from_chat:
-            text += f"forwarded Chat ID: `{message.reply_to_message.forward_from_chat.id}`\n"
-        await message.reply_text(text)
-    else:
-        text = f"📍 **Chat ID:** `{message.chat.id}`\n👤 **Your ID:** `{message.from_user.id}`"
-        await message.reply_text(text)
+        rep = message.reply_to_message
+        rep_user = rep.from_user.id if rep.from_user else (rep.sender_chat.id if rep.sender_chat else "Anonymous")
+        response += f"\n\n↩️ **रिप्लाई यूजर ID:** `{rep_user}`"
+        if rep.forward_from_chat:
+            response += f"\n📢 **फॉरवर्ड चैट ID:** `{rep.forward_from_chat.id}`"
+            
+    await message.reply_text(response)
 
 @Client.on_message(filters.command(["help"]))
 async def send_help(client: Client, message: Message):
@@ -89,31 +91,33 @@ async def send_help(client: Client, message: Message):
 
 @Client.on_message(filters.command(["cancel"]))
 async def send_cancel(client: Client, message: Message):
-    batch_temp.IS_BATCH[message.from_user.id] = True
-    if message.from_user.id in batch_temp.CLONE_DATA:
-        del batch_temp.CLONE_DATA[message.from_user.id]
+    user_id = message.from_user.id
+    batch_temp.IS_BATCH[user_id] = True
+    if user_id in batch_temp.CLONE_DATA:
+        del batch_temp.CLONE_DATA[user_id]
     await message.reply_text("🛑 **टास्क रद्द कर दिया गया है।**")
 
-# ----------------- /clone WORKFLOW ----------------- #
+# टेलीग्राम लिंक पार्सर
 def parse_telegram_link(link: str):
     link = link.strip().replace("?single", "")
-    parts = [p for p in link.split("/") if p]
-    try:
-        msg_id = int(parts[-1])
-    except ValueError:
-        return None, None
-
-    if "t.me/c/" in link:
-        # प्राइवेट चैनल / टॉपिक ग्रुप
-        chat_id = int("-100" + parts[3])
+    
+    c_match = re.search(r"t\.me/c/(\d+)(?:/\d+)?/(\d+)", link)
+    if c_match:
+        chat_id = int("-100" + c_match.group(1))
+        msg_id = int(c_match.group(2))
         return chat_id, msg_id
-    elif "t.me/b/" in link:
-        # बॉट चैट
-        return parts[3], msg_id
-    else:
-        # पब्लिक चैनल / टॉपिक ग्रुप
-        return parts[2], msg_id
 
+    b_match = re.search(r"t\.me/b/([^/]+)/(\d+)", link)
+    if b_match:
+        return b_match.group(1), int(b_match.group(2))
+
+    p_match = re.search(r"t\.me/([^/]+)(?:/\d+)?/(\d+)", link)
+    if p_match:
+        return p_match.group(1), int(p_match.group(2))
+
+    return None, None
+
+# ----------------- /clone COMMAND ----------------- #
 @Client.on_message(filters.command(["clone", "clon"]) & filters.private)
 async def clone_command(client: Client, message: Message):
     user_id = message.from_user.id
@@ -125,7 +129,7 @@ async def clone_command(client: Client, message: Message):
         )
 
     if batch_temp.IS_BATCH.get(user_id) == False:
-        return await message.reply_text("⚠️ एक टास्क पहले से चल रहा है। इंतज़ार करें या /cancel करें।")
+        return await message.reply_text("⚠️ एक टास्क पहले से चल रहा है। कृपया इंतज़ार करें या /cancel करें।")
 
     user_session = db.get_session(user_id)
     if not user_session:
@@ -138,7 +142,8 @@ async def clone_command(client: Client, message: Message):
         "2. **Private:** `https://t.me/c/123456789/123`\n"
         "3. **Topic Group:** `https://t.me/username/topic_id/msg_id`\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👉 **स्टेप 1:** जहाँ से कॉपी करना है, उसकी **पहली लिंक (Start Link)** भेजें:"
+        "👉 **स्टेप 1:** जहाँ से कॉपी करना है, उसकी **पहली लिंक (Start Link)** भेजें:\n"
+        "(रद्द करने के लिए /cancel लिखें)"
     )
     
     first_msg = await client.ask(user_id, guide_text, filters=filters.text, timeout=300)
@@ -162,7 +167,6 @@ async def clone_command(client: Client, message: Message):
     
     if last_msg.text.strip() == "/single":
         e_chat, e_id = s_chat, s_id
-        end_link = start_link
     else:
         end_link = last_msg.text.strip()
         e_chat, e_id = parse_telegram_link(end_link)
@@ -227,6 +231,7 @@ async def show_customization_menu(client: Client, user_id: int):
     ])
     await client.send_message(user_id, panel_text, reply_markup=buttons)
 
+# ----------------- CALLBACK BUTTONS ----------------- #
 @Client.on_callback_query()
 async def callback_handler(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
@@ -269,10 +274,11 @@ async def callback_handler(client: Client, query: CallbackQuery):
         await query.message.delete()
         await start_clone_task(client, user_id)
 
+# ----------------- EXECUTION FUNCTION ----------------- #
 async def start_clone_task(client: Client, user_id: int):
     task = batch_temp.CLONE_DATA.get(user_id)
     if not task:
-        return
+        return await client.send_message(user_id, "❌ कोई सक्रिय टास्क नहीं मिला। कृपया /clone दोबारा करें।")
 
     source_chat = task["source_chat"]
     start_id = task["start_id"]
@@ -280,14 +286,19 @@ async def start_clone_task(client: Client, user_id: int):
     target_chat = task["target_chat"]
 
     user_session = db.get_session(user_id)
-    api_id = int(db.get_api_id(user_id))
+    raw_api_id = db.get_api_id(user_id)
     api_hash = db.get_api_hash(user_id)
 
+    if not user_session or not raw_api_id or not api_hash:
+        return await client.send_message(user_id, "❌ आपका लॉगिन डेटा नहीं मिला। कृपया पहले /login करें।")
+
+    api_id = int(raw_api_id)
+
+    acc = Client(f"user_session_{user_id}", session_string=user_session, api_hash=api_hash, api_id=api_id, in_memory=True)
     try:
-        acc = Client("saverestricted", session_string=user_session, api_hash=api_hash, api_id=api_id)
-        await acc.connect()
+        await acc.start()
     except Exception as e:
-        return await client.send_message(user_id, f"❌ सेशन कनेक्ट एरर: `{e}`")
+        return await client.send_message(user_id, f"❌ यूजर सेशन शुरू करने में एरर: `{e}`\nकृपया /logout करके दोबारा /login करें।")
 
     batch_temp.IS_BATCH[user_id] = False
     success = 0
@@ -309,13 +320,14 @@ async def start_clone_task(client: Client, user_id: int):
                 total_bytes += sz
             else:
                 not_found += 1
-        except Exception:
+        except Exception as e:
             retrying += 1
+            print(f"Error transferring {msgid}: {e}")
 
         await asyncio.sleep(WAITING_TIME)
 
     try:
-        await acc.disconnect()
+        await acc.stop()
     except Exception:
         pass
 
@@ -345,7 +357,8 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         msg: Message = await acc.get_messages(source_chat, msgid)
         if not msg or msg.empty:
             return False, 0
-    except Exception:
+    except Exception as e:
+        print(f"Message fetch error: {e}")
         return False, 0
 
     final_caption = msg.caption or ""
@@ -354,7 +367,7 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     if task.get("extra_caption"):
         final_caption = f"{final_caption}\n\n{task['extra_caption']}" if final_caption else task["extra_caption"]
 
-    # केवल टेक्स्ट मैसेज होने पर
+    # केवल टेक्स्ट मैसेज
     if msg.text:
         text_to_send = task.get("custom_caption") or msg.text
         if task.get("extra_caption"):
@@ -362,7 +375,6 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         await client.send_message(target_chat, text_to_send, entities=msg.entities)
         return True, len(text_to_send.encode('utf-8'))
 
-    # मीडिया डाउनलोड
     down_start = time.time()
     await status_msg.edit_text(f"📥 **Downloading ID:** `{msgid}`...")
     
@@ -402,6 +414,9 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
             await client.send_photo(target_chat, file_path, caption=final_caption)
         else:
             await client.send_document(target_chat, file_path, thumb=thumb_to_use, caption=final_caption)
+    except Exception as e:
+        print(f"Upload error: {e}")
+        return False, 0
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
