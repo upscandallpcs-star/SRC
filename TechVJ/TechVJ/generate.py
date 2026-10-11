@@ -1,8 +1,7 @@
 import traceback
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message
 from pyrogram import Client, filters
 from pyrogram.errors import (
-    ApiIdInvalid,
     PhoneNumberInvalid,
     PhoneCodeInvalid,
     PhoneCodeExpired,
@@ -30,64 +29,50 @@ async def main(bot: Client, message: Message):
         await message.reply("⚠️ **आप पहले से लॉगिन हैं। नया अकाउंट जोड़ने से पहले /logout करें।**")
         return 
 
-    api_id_msg = await bot.ask(
-        user_id, 
-        "<b>अपना API ID भेजें।</b>\n\nडिफ़ॉल्ट API इस्तेमाल करने के लिए /skip भेजें।", 
-        filters=filters.text
-    )
-    if api_id_msg.text == "/cancel":
-        return await api_id_msg.reply("❌ प्रोसेस रद्द कर दिया गया।")
-    elif api_id_msg.text == "/skip":
-        api_id = API_ID
-        api_hash = API_HASH
-    else:
-        try:
-            api_id = int(api_id_msg.text)
-        except ValueError:
-            return await api_id_msg.reply("❌ API ID सिर्फ नंबर होना चाहिए। दोबारा /login करें।")
-        
-        api_hash_msg = await bot.ask(user_id, "अब अपना **API HASH** भेजें:", filters=filters.text)
-        if api_hash_msg.text == "/cancel":
-            return await api_hash_msg.reply("❌ प्रोसेस रद्द कर दिया गया।")
-        api_hash = api_hash_msg.text
-        
+    # सीधे फ़ोन नंबर मांगना (API ID / Hash नहीं पूछेगा)
     phone_number_msg = await bot.ask(
         chat_id=user_id, 
-        text="<b>कंट्री कोड के साथ अपना फ़ोन नंबर भेजें:</b>\n(उदाहरण: <code>+919876543210</code>)"
+        text="📱 **कंट्री कोड के साथ अपना फ़ोन नंबर भेजें:**\n(उदाहरण: `+919876543210`)\n\nरद्द करने के लिए /cancel लिखें।",
+        filters=filters.text,
+        timeout=300
     )
     if phone_number_msg.text == '/cancel':
         return await phone_number_msg.reply("❌ प्रोसेस रद्द कर दिया गया।")
-    phone_number = phone_number_msg.text
+    
+    phone_number = phone_number_msg.text.strip()
+    api_id = API_ID
+    api_hash = API_HASH
 
     client = Client(":memory:", api_id=api_id, api_hash=api_hash)
     await client.connect()
-    await phone_number_msg.reply("OTP भेजा जा रहा है...")
+    await phone_number_msg.reply("📩 OTP भेजा जा रहा है...")
+    
     try:
         code = await client.send_code(phone_number)
         phone_code_msg = await bot.ask(
             user_id, 
-            "टेलीग्राम पर आया हुआ OTP यहाँ भेजें (अंकों के बीच स्पेस देकर, जैसे: `1 2 3 4 5`):\n\nरद्द करने के लिए /cancel लिखें।", 
+            "📲 टेलीग्राम पर आया हुआ OTP यहाँ भेजें (अंकों के बीच स्पेस देकर, जैसे: `1 2 3 4 5`):\n\nरद्द करने के लिए /cancel लिखें।", 
             filters=filters.text, 
             timeout=600
         )
     except PhoneNumberInvalid:
-        await phone_number_msg.reply("❌ अमान्य फ़ोन नंबर।")
+        await phone_number_msg.reply("❌ अमान्य फ़ोन नंबर। कृपया सही नंबर डालकर दोबारा /login करें।")
         return
 
     if phone_code_msg.text == '/cancel':
         return await phone_code_msg.reply("❌ प्रोसेस रद्द कर दिया गया।")
 
     try:
-        phone_code = phone_code_msg.text.replace(" ", "")
+        phone_code = phone_code_msg.text.replace(" ", "").replace("-", "")
         await client.sign_in(phone_number, code.phone_code_hash, phone_code)
     except PhoneCodeInvalid:
-        return await phone_code_msg.reply("❌ OTP गलत है।")
+        return await phone_code_msg.reply("❌ गलत OTP दर्ज किया गया है।")
     except PhoneCodeExpired:
         return await phone_code_msg.reply("❌ OTP एक्सपायर हो चुका है।")
     except SessionPasswordNeeded:
         two_step_msg = await bot.ask(
             user_id, 
-            "आपके अकाउंट पर 2-Step Verification लगा है। कृपया अपना पासवर्ड भेजें:\n\nरद्द करने के लिए /cancel लिखें।", 
+            "🔐 आपके अकाउंट पर Two-Step Verification लगा है। कृपया अपना पासवर्ड भेजें:\n\nरद्द करने के लिए /cancel लिखें।", 
             filters=filters.text, 
             timeout=300
         )
@@ -108,5 +93,4 @@ async def main(bot: Client, message: Message):
     db.set_api_id(user_id, api_id=str(api_id))
     db.set_api_hash(user_id, api_hash=str(api_hash))
 
-    await bot.send_message(user_id, "✅ **अकाउंट सफलतापूर्वक लॉगिन हो गया है!**\nअब आप प्राइवेट चैनल्स के लिंक भेजकर कंटेंट डाउनलोड कर सकते हैं।")
-      
+    await bot.send_message(user_id, "🎉 **अकाउंट सफलतापूर्वक लॉगिन हो गया है!**\nअब आप `/clone` कमांड का उपयोग करके कंटेंट ट्रांसफर कर सकते हैं।")
