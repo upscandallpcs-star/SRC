@@ -10,7 +10,6 @@ from pyrogram.errors import FloodWait, RPCError
 from config import API_ID, API_HASH, ADMINS, CHANNEL_ID, WAITING_TIME
 from db import db
 
-# संपूर्ण और विस्तृत हेल्प गाइड
 HELP_TXT = """📚 **User Guide & Manual**
 ━━━━━━━━━━━━━━━━━━━━
 
@@ -36,7 +35,9 @@ HELP_TXT = """📚 **User Guide & Manual**
 1. `/clone` शुरू करें और स्टेप 3 पूरा करें।
 2. सेटिंग्स मेन्यू में **🖼️ Set Thumbnail** दबाएँ।
 3. कोई भी फ़ोटो भेजें — वह थंबनेल सिर्फ आपके इस टास्क के सभी वीडियो पर लगेगा!
-4. यदि थंबनेल नहीं भेजते हैं, तो बॉट खुद वीडियो से ओरिजिनल थंबनेल बना देगा।
+
+🔄 **Auto-Resume Feature:**
+यदि कोई टास्क बीच में रुक जाए, तो उसी जगह से दोबारा शुरू करने के लिए `/resume` कमांड भेजें।
 
 🔗 **Message link kaise milega?**
 मैसेज पर लॉन्ग प्रेस करें ➔ **Copy Link**
@@ -46,13 +47,14 @@ HELP_TXT = """📚 **User Guide & Manual**
 
 ━━━━━━━━━━━━━━━━━━━━
 **उपलब्ध कमांड्स:**
-`/start` `/clone` `/cancel` `/login` `/logout` `/id` `/plans` `/myplan` `/help`
+`/start` `/clone` `/resume` `/cancel` `/login` `/logout` `/id` `/plans` `/myplan` `/help`
 
 Help chahiye? Contact Admin: @Avigat1210"""
 
 class batch_temp(object):
     IS_BATCH = {}
     CLONE_DATA = {}
+    LAST_SAVED_ID = {} # ऑटो-रिज्यूम ट्रैकर
 
 def humanbytes(size):
     if not size:
@@ -75,7 +77,6 @@ def time_formatter(seconds: int) -> str:
         ((str(seconds) + "s") if seconds else "")
     return tmp if tmp else "0s"
 
-# सुरक्षित लाइव प्रोग्रेस बार (हर 12 सेकंड में अपडेट)
 async def progress_bar(current, total, ud_type, message, start, fname=""):
     now = time.time()
     diff = now - start
@@ -107,7 +108,6 @@ async def progress_bar(current, total, ud_type, message, start, fname=""):
         except Exception:
             pass
 
-# वीडियो से ऑटो-थंबनेल तैयार करना (ब्लैक स्क्रीन से बचाव)
 def generate_auto_thumb(video_path: str, thumb_path: str):
     try:
         cmd = [
@@ -148,7 +148,8 @@ async def send_start(client: Client, message: Message):
         "✅ Forward-restricted channel/group supported\n"
         "✅ Topics/Threads groups supported\n"
         "✅ 2GB+ files · Custom caption & link entities editing\n"
-        "✅ Custom transfer thumbnail support\n\n"
+        "✅ Custom transfer thumbnail support\n"
+        "✅ Resume broken transfers (`/resume`)\n\n"
         "Access lene ke liye admin se sampark karein: @Avigat1210\n"
         "Puri guide dekhne ke liye /help send karein."
     )
@@ -158,9 +159,7 @@ async def send_start(client: Client, message: Message):
 async def send_cancel(client: Client, message: Message):
     user_id = message.from_user.id
     batch_temp.IS_BATCH[user_id] = True
-    if user_id in batch_temp.CLONE_DATA:
-        del batch_temp.CLONE_DATA[user_id]
-    await message.reply_text("🛑 **टास्क रद्द कर दिया गया है।**")
+    await message.reply_text("🛑 **टास्क रोक दिया गया है।** यदि इसे वापस वहीं से चलाना हो तो `/resume` भेजें।")
 
 def parse_telegram_link(link: str):
     link = link.strip().replace("?single", "")
@@ -174,6 +173,22 @@ def parse_telegram_link(link: str):
     if p_match:
         return p_match.group(1), int(p_match.group(2))
     return None, None
+
+@Client.on_message(filters.command(["resume"]) & filters.private)
+async def resume_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    task = batch_temp.CLONE_DATA.get(user_id)
+    last_id = batch_temp.LAST_SAVED_ID.get(user_id)
+    if not task or not last_id:
+        return await message.reply_text("⚠️ कोई रुका हुआ पिछला टास्क नहीं मिला। कृपया नया टास्क शुरू करने के लिए `/clone` करें।")
+    
+    if last_id >= task["end_id"]:
+        return await message.reply_text("✅ पिछला टास्क पहले ही पूरा हो चुका था।")
+
+    # जहाँ रुका था, उसके अगले ID से शुरू करना
+    task["start_id"] = last_id + 1
+    await message.reply_text(f"🔄 **टास्क रिज्यूम किया जा रहा है...** (ID `{task['start_id']}` से `{task['end_id']}` तक)")
+    await start_clone_task(client, user_id)
 
 @Client.on_message(filters.command(["clone", "clon"]) & filters.private)
 async def clone_command(client: Client, message: Message):
@@ -296,7 +311,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         find_msg = await client.ask(user_id, "🔍 क्या खोजना/हटाना चाहते हैं? वह शब्द भेजें:", filters=filters.text, timeout=180)
         if find_msg.text == "/cancel":
             return await show_customization_menu(client, user_id)
-        with_msg = await client.ask(user_id, f"✏️ `{find_msg.text}` की जगह क्या लगाना चाहते हैं? (हाइपरलिंक भी भेज सकते हैं, खाली रखने के लिए `/empty`):", filters=filters.text, timeout=180)
+        with_msg = await client.ask(user_id, f"✏️ `{find_msg.text}` की जगह क्या लगाना चाहते हैं? (खाली रखने के लिए `/empty`):", filters=filters.text, timeout=180)
         if with_msg.text == "/cancel":
             return await show_customization_menu(client, user_id)
         batch_temp.CLONE_DATA[user_id]["replace_find"] = find_msg.text
@@ -385,6 +400,7 @@ async def start_clone_task(client: Client, user_id: int):
                 if ok:
                     success += 1
                     total_bytes += sz
+                    batch_temp.LAST_SAVED_ID[user_id] = msgid # प्रोग्रेस सेव
                 else:
                     not_found += 1
                 break
@@ -412,7 +428,6 @@ async def start_clone_task(client: Client, user_id: int):
     tpath = task.get("thumb_path")
     if tpath and os.path.exists(tpath):
         os.remove(tpath)
-    del batch_temp.CLONE_DATA[user_id]
 
     elapsed_time = max(1, int(time.time() - start_time))
     avg_speed = f"{humanbytes(total_bytes / elapsed_time)}/s"
@@ -430,14 +445,21 @@ async def start_clone_task(client: Client, user_id: int):
     )
     await status_msg.edit_text(summary_card)
 
+# फ़ोटो और मीडिया का सही नाम और एक्सटेंशन पहचानना
 def get_file_name_from_msg(msg: Message) -> str:
     if msg.document and msg.document.file_name:
         return msg.document.file_name
     elif msg.video and msg.video.file_name:
         return msg.video.file_name
+    elif msg.video:
+        return f"video_{msg.id}.mp4"
     elif msg.audio and msg.audio.file_name:
         return msg.audio.file_name
-    return f"file_{msg.id}.mp4"
+    elif msg.audio:
+        return f"audio_{msg.id}.mp3"
+    elif msg.photo:
+        return f"photo_{msg.id}.jpg"
+    return f"file_{msg.id}.bin"
 
 async def process_media(client: Client, acc: Client, user_id: int, source_chat, msgid: int, target_chat, task: dict, status_msg: Message):
     msg = None
@@ -452,7 +474,6 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     if not msg or msg.empty:
         return False, 0
 
-    # Markdown लिंक और फॉर्मेटिंग सुरक्षित रखना
     final_caption = msg.caption.markdown if msg.caption else ""
 
     if task.get("custom_caption"):
@@ -469,7 +490,7 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         else:
             final_caption = task["extra_caption"]
 
-    # टेक्स्ट मैसेज ट्रांसफर
+    # केवल टेक्स्ट मैसेज
     if msg.text:
         text_to_send = msg.text.markdown
         if task.get("custom_caption"):
@@ -491,12 +512,16 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     down_start = time.time()
     await status_msg.edit_text(f"📥 **Downloading ID:** `{msgid}`\n📁 **File:** `{file_name}`...")
 
-    file_path = await acc.download_media(
-        msg,
-        file_name=down_path,
-        progress=progress_bar,
-        progress_args=("📥 Downloading ID: " + str(msgid), status_msg, down_start, file_name)
-    )
+    # फ़ोटो के लिए प्रोग्रेस बार की ज़रूरत नहीं होती
+    if msg.photo:
+        file_path = await acc.download_media(msg, file_name=down_path)
+    else:
+        file_path = await acc.download_media(
+            msg,
+            file_name=down_path,
+            progress=progress_bar,
+            progress_args=("📥 Downloading ID: " + str(msgid), status_msg, down_start, file_name)
+        )
 
     if not file_path or not os.path.exists(file_path):
         return False, 0
@@ -514,7 +539,11 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         thumb_to_use = created_temp_thumb
 
     try:
-        if msg.document:
+        if msg.photo:
+            await client.send_photo(
+                target_chat, file_path, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN
+            )
+        elif msg.document:
             await client.send_document(
                 target_chat, file_path, thumb=thumb_to_use, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN,
                 progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start, file_name)
@@ -530,8 +559,6 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
                 target_chat, file_path, thumb=thumb_to_use, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN,
                 progress=progress_bar, progress_args=(f"📤 Uploading ID: {msgid}", status_msg, up_start, file_name)
             )
-        elif msg.photo:
-            await client.send_photo(target_chat, file_path, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN)
         else:
             await client.send_document(target_chat, file_path, thumb=thumb_to_use, caption=final_caption, parse_mode=enums.ParseMode.MARKDOWN)
     except Exception as e:
