@@ -1,25 +1,33 @@
 import os
 import math
 import asyncio
+import time
 from pyrogram import Client
 from pyrogram.raw.functions.upload import GetFile
 from pyrogram.raw.types import InputDocumentFileLocation, InputPhotoFileLocation
 
-CHUNK_SIZE = 1024 * 1024  # 1 MB चंक
+# 1024 KB (1 MB) चंक साइज़
+CHUNK_SIZE = 1024 * 1024
+# 8 समानांतर पैरेलल वर्कर्स (यह टेलीग्राम की 260 KB/s थ्रॉटलिंग को बाईपास करता है)
+PARALLEL_WORKERS = 8
 
-async def download_part(client: Client, location, offset: int, limit: int):
-    try:
-        r = await client.invoke(
-            GetFile(
-                location=location,
-                offset=offset,
-                limit=limit,
-                precise=True
+async def download_chunk_part(client: Client, location, offset: int, limit: int):
+    retries = 3
+    while retries > 0:
+        try:
+            res = await client.invoke(
+                GetFile(
+                    location=location,
+                    offset=offset,
+                    limit=limit,
+                    precise=True
+                )
             )
-        )
-        return r.bytes
-    except Exception:
-        return b""
+            return res.bytes
+        except Exception:
+            retries -= 1
+            await asyncio.sleep(0.5)
+    return b""
 
 async def fast_download_file(client: Client, msg, out_path: str, progress_func=None, progress_args=()):
     media = msg.document or msg.video or msg.audio or msg.photo
@@ -27,10 +35,11 @@ async def fast_download_file(client: Client, msg, out_path: str, progress_func=N
         return None
 
     file_size = getattr(media, "file_size", 0)
-    if not file_size or file_size < 5 * 1024 * 1024:
-        # 5 MB से छोटी फाइलों के लिए सामान्य डाउनलोड
+    if not file_size or file_size < 10 * 1024 * 1024:
+        # 10 MB से छोटी फाइलों को डिफ़ॉल्ट रूप से तुरंत डाउनलोड करें
         return await client.download_media(msg, file_name=out_path)
 
+    # लोकेशन एक्सट्रेक्ट करना
     if msg.photo:
         photo = msg.photo
         location = InputPhotoFileLocation(
@@ -47,36 +56,44 @@ async def fast_download_file(client: Client, msg, out_path: str, progress_func=N
             thumb_size=""
         )
 
-    part_count = math.ceil(file_size / CHUNK_SIZE)
+    total_chunks = math.ceil(file_size / CHUNK_SIZE)
+    chunks_dict = {}
     downloaded_bytes = 0
+    start_time = time.time()
 
-    with open(out_path, "wb") as f:
-        # 4 पैरेलल चंक्स एक साथ टेलीग्राम सर्वर से खींचना
-        semaphore = asyncio.Semaphore(4)
+    queue = asyncio.Queue()
+    for i in range(total_chunks):
+        queue.put_nowait(i)
 
-        async def worker(index):
-            nonlocal downloaded_bytes
-            offset = index * CHUNK_SIZE
+    async def worker():
+        nonlocal downloaded_bytes
+        while not queue.empty():
+            part_id = await queue.get()
+            offset = part_id * CHUNK_SIZE
             limit = min(CHUNK_SIZE, file_size - offset)
-            async with semaphore:
-                chunk = await download_part(client, location, offset, limit)
-                return index, chunk
-
-        tasks = [worker(i) for i in range(part_count)]
-        
-        # बैच प्रोसेस ताकि RAM न भरे और स्पीड 4 गुना मिले
-        batch_size = 8
-        for i in range(0, len(tasks), batch_size):
-            batch = tasks[i:i + batch_size]
-            results = await asyncio.gather(*batch)
-            for _, chunk_data in results:
-                f.write(chunk_data)
-                downloaded_bytes += len(chunk_data)
+            
+            chunk_data = await download_chunk_part(client, location, offset, limit)
+            chunks_dict[part_id] = chunk_data
+            downloaded_bytes += len(chunk_data)
 
             if progress_func:
                 try:
                     await progress_func(downloaded_bytes, file_size, *progress_args)
                 except Exception:
                     pass
+            queue.task_done()
 
+    # 8 समानांतर TCP कनेक्शन्स चालू करें
+    workers = [asyncio.create_task(worker()) for _ in range(PARALLEL_WORKERS)]
+    await asyncio.gather(*workers)
+
+    # फ़ाइल को सीधे राइट करना
+    with open(out_path, "wb") as f:
+        for i in range(total_chunks):
+            if i in chunks_dict:
+                f.write(chunks_dict[i])
+            else:
+                return None
+
+    chunks_dict.clear()
     return out_path
