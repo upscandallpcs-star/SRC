@@ -3,19 +3,17 @@ import asyncio
 import time
 import pyrogram
 from pyrogram import Client, filters, enums
-from pyrogram.errors import FloodWait, UserAlreadyParticipant, InviteHashExpired, UsernameNotOccupied
 from pyrogram.types import Message 
 from config import ADMINS, CHANNEL_ID, WAITING_TIME
 from db import db
 
-# सुरक्षित इम्पोर्ट ताकि ModuleNotFoundError न आए
 try:
     from TechVJ.strings import HELP_TXT
 except ModuleNotFoundError:
     try:
         from strings import HELP_TXT
     except ImportError:
-        HELP_TXT = "🌟 **SACHIN SHARMA सेव रेस्ट्रिक्टेड बॉट**\n\nकंटेंट डाउनलोड करने के लिए पोस्ट का लिंक भेजें।"
+        HELP_TXT = "🌟 **SACHIN SHARMA सेव रेस्ट्रिक्टेड बॉट**\n\nकंटेंट डाउनलोड करने के लिए /clone कमांड भेजें।"
 
 class batch_temp(object):
     IS_BATCH = {}
@@ -66,14 +64,12 @@ async def send_cancel(client: Client, message: Message):
     batch_temp.IS_BATCH[message.from_user.id] = True
     await message.reply_text("🛑 **टास्क रद्द कर दिया गया है।**")
 
-@Client.on_message(filters.text & filters.private)
-async def save(client: Client, message: Message):
+# ----------------- /clone COMMAND ----------------- #
+@Client.on_message(filters.command(["clone", "clon"]) & filters.private)
+async def clone_command(client: Client, message: Message):
     user_id = message.from_user.id
 
-    if message.text.startswith("/"):
-        return
-
-    # वीआईपी प्लान जांच
+    # वीआईपी प्लान सुरक्षा जांच
     if not db.is_user_vip(user_id, ADMINS):
         return await message.reply_text(
             "🔒 **यह फीचर केवल एक्टिव पेड मेंबर्स के लिए है!**\n\n"
@@ -81,17 +77,30 @@ async def save(client: Client, message: Message):
             "प्लान देखने के लिए: /plans"
         )
 
-    # लिंक वैलिडेशन
-    if "https://t.me/" not in message.text:
-        return
-
     if batch_temp.IS_BATCH.get(user_id) == False:
         return await message.reply_text("⚠️ एक टास्क पहले से चल रहा है। कृपया पूरा होने का इंतज़ार करें या /cancel करें।")
 
-    # लॉगिन सेशन प्राप्त करें
+    # लॉगिन सेशन जांच
     user_session = db.get_session(user_id)
     if not user_session:
         return await message.reply_text("🔑 प्राइवेट व रेस्ट्रिक्टेड कंटेंट के लिए पहले **/login** करें।")
+
+    # लिंक मांगना
+    link_msg = await client.ask(
+        user_id,
+        "🔗 **कृपया पोस्ट या चैनल का लिंक भेजें:**\n\n"
+        "• सिंगल पोस्ट: `https://t.me/c/12345/10`\n"
+        "• मल्टी पोस्ट्स: `https://t.me/c/12345/10-20`\n\n"
+        "रद्द करने के लिए /cancel लिखें।",
+        filters=filters.text,
+        timeout=300
+    )
+
+    if link_msg.text == "/cancel":
+        return await link_msg.reply("❌ प्रोसेस रद्द कर दिया गया।")
+
+    if "https://t.me/" not in link_msg.text:
+        return await link_msg.reply("❌ अमान्य टेलीग्राम लिंक! कृपया सही लिंक के साथ दोबारा /clone करें।")
 
     api_id = int(db.get_api_id(user_id))
     api_hash = db.get_api_hash(user_id)
@@ -100,23 +109,22 @@ async def save(client: Client, message: Message):
         acc = Client("saverestricted", session_string=user_session, api_hash=api_hash, api_id=api_id)
         await acc.connect()
     except Exception:
-        return await message.reply_text("❌ आपका लॉगिन सेशन अमान्य या एक्सपायर हो गया है। पहले /logout करें और फिर /login करें।")
+        return await link_msg.reply("❌ आपका लॉगिन सेशन एक्सपायर हो गया है। पहले /logout करें और फिर /login करें।")
 
-    datas = message.text.split("/")
+    datas = link_msg.text.split("/")
     temp = datas[-1].replace("?single", "").split("-")
     fromID = int(temp[0].strip())
     toID = int(temp[1].strip()) if len(temp) > 1 else fromID
 
     batch_temp.IS_BATCH[user_id] = False
     
-    # ट्रैकिंग काउंटर्स
     success = 0
     not_found = 0
     retrying = 0
     total_bytes = 0
     start_time = time.time()
 
-    status_msg = await message.reply_text("⏳ **टास्क शुरू हो रहा है...**")
+    status_msg = await link_msg.reply_text("⏳ **टास्क शुरू हो रहा है...**")
 
     for msgid in range(fromID, toID + 1):
         if batch_temp.IS_BATCH.get(user_id):
@@ -124,22 +132,22 @@ async def save(client: Client, message: Message):
 
         try:
             # प्राइवेट चैट
-            if "https://t.me/c/" in message.text:
+            if "https://t.me/c/" in link_msg.text:
                 chatid = int("-100" + datas[4])
-                ok, sz = await process_media(client, acc, message, chatid, msgid)
+                ok, sz = await process_media(client, acc, link_msg, chatid, msgid)
             # बॉट चैट
-            elif "https://t.me/b/" in message.text:
+            elif "https://t.me/b/" in link_msg.text:
                 username = datas[4]
-                ok, sz = await process_media(client, acc, message, username, msgid)
+                ok, sz = await process_media(client, acc, link_msg, username, msgid)
             # पब्लिक चैट
             else:
                 username = datas[3]
                 try:
                     msg = await client.get_messages(username, msgid)
-                    await client.copy_message(message.chat.id, msg.chat.id, msg.id)
+                    await client.copy_message(link_msg.chat.id, msg.chat.id, msg.id)
                     ok, sz = True, (msg.document.file_size if msg.document else (msg.video.file_size if msg.video else 1024))
                 except Exception:
-                    ok, sz = await process_media(client, acc, message, username, msgid)
+                    ok, sz = await process_media(client, acc, link_msg, username, msgid)
 
             if ok:
                 success += 1
@@ -159,7 +167,6 @@ async def save(client: Client, message: Message):
 
     batch_temp.IS_BATCH[user_id] = True
 
-    # ट्रांसफर समरी रिपोर्ट
     elapsed_time = max(1, int(time.time() - start_time))
     avg_speed_val = total_bytes / elapsed_time
     avg_speed = f"{humanbytes(avg_speed_val)}/s"
