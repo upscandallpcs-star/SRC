@@ -280,7 +280,6 @@ async def start_clone_task(client: Client, user_id: int):
     user_api_id = int(db.get_api_id(user_id) or API_ID)
     user_api_hash = db.get_api_hash(user_id) or API_HASH
 
-    # 150 Workers और 16 Concurrent Transmissions
     acc = Client(
         f"user_session_{user_id}", 
         session_string=user_session, 
@@ -360,7 +359,6 @@ def get_file_name_from_msg(msg: Message) -> str:
         return msg.audio.file_name
     return f"file_{msg.id}.mp4"
 
-# हाई-स्पीड चंक बफ़र डाउनलोडर
 async def turbo_download(acc: Client, msg: Message, out_path: str, progress_func, progress_args):
     media = msg.document or msg.video or msg.audio or msg.photo
     total_size = getattr(media, "file_size", 0) if media else 0
@@ -368,7 +366,6 @@ async def turbo_download(acc: Client, msg: Message, out_path: str, progress_func
     try:
         current = 0
         with open(out_path, "wb") as f:
-            # stream_media बिना किसी file_reference एरर के डायरेक्ट चंक्स खींचता है
             async for chunk in acc.stream_media(msg, limit=0):
                 f.write(chunk)
                 current += len(chunk)
@@ -395,6 +392,7 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     if not msg or msg.empty:
         return False, 0
 
+    # कैप्शन रिप्लेसमेंट
     final_caption = msg.caption or ""
     if task.get("custom_caption"):
         final_caption = task["custom_caption"]
@@ -407,6 +405,24 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     if task.get("extra_caption"):
         final_caption = f"{final_caption}\n\n{task['extra_caption']}" if final_caption else task["extra_caption"]
 
+    # ⚡ इंस्टेंट क्लाउड बाईपास (डाउनलोडिंग की ज़रूरत नहीं, 2 सेकंड में सर्वर-टू-सर्वर ट्रांसफर)
+    if not task.get("thumb_path"):
+        try:
+            await status_msg.edit_text(f"⚡ **Direct Cloud Transferring ID:** `{msgid}`...")
+            copied = await acc.copy_message(
+                chat_id=target_chat,
+                from_chat_id=source_chat,
+                message_id=msgid,
+                caption=final_caption if (msg.caption or task.get("custom_caption") or task.get("replace_find")) else None
+            )
+            if copied:
+                media = msg.document or msg.video or msg.audio or msg.photo
+                sz = getattr(media, "file_size", 1024 * 1024) if media else 1024
+                return True, sz
+        except Exception as bypass_err:
+            print(f"Direct cloud copy failed, fallback to download: {bypass_err}")
+
+    # टेक्स्ट मैसेज ट्रांसफर
     if msg.text:
         text_to_send = msg.text
         if task.get("custom_caption"):
@@ -420,6 +436,7 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         await client.send_message(target_chat, text_to_send, entities=msg.entities)
         return True, len(text_to_send.encode('utf-8'))
 
+    # फ़ॉलबैक डाउनलोडर (अगर डायरेक्ट क्लाउड कॉपी फ़ेल हो जाए)
     file_name = get_file_name_from_msg(msg)
     down_path = os.path.join("downloads", f"{msgid}_{file_name}")
     os.makedirs("downloads", exist_ok=True)
@@ -427,7 +444,6 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     down_start = time.time()
     await status_msg.edit_text(f"📥 **Downloading ID:** `{msgid}`\n📁 **File:** `{file_name}`...")
 
-    # टर्बो डाउनलोडर
     file_path = await turbo_download(
         acc, msg, down_path,
         progress_func=progress_bar,
