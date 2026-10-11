@@ -41,11 +41,11 @@ def time_formatter(seconds: int) -> str:
         ((str(seconds) + "s") if seconds else "")
     return tmp if tmp else "0s"
 
-# लाइव प्रोग्रेस बार जिसमें फ़ाइल नेम भी दिखेगा
+# हाई-स्पीड प्रोग्रेस बार (हर 5 सेकंड में एक बार एडिट होगा ताकि टेलीग्राम स्पीड लॉक न करे)
 async def progress_bar(current, total, ud_type, message, start, fname=""):
     now = time.time()
     diff = now - start
-    if round(diff % 4.00) == 0 or current == total:
+    if round(diff % 5.00) == 0 or current == total:
         percentage = current * 100 / total if total > 0 else 0
         speed = current / diff if diff > 0 else 0
         elapsed_time = round(diff)
@@ -308,7 +308,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         await query.message.delete()
         await start_clone_task(client, user_id)
 
-# ----------------- EXECUTION FUNCTION ----------------- #
+# ----------------- EXECUTION (HIGH SPEED WORKERS) ----------------- #
 async def start_clone_task(client: Client, user_id: int):
     task = batch_temp.CLONE_DATA.get(user_id)
     if not task:
@@ -326,7 +326,16 @@ async def start_clone_task(client: Client, user_id: int):
     user_api_id = int(db.get_api_id(user_id) or API_ID)
     user_api_hash = db.get_api_hash(user_id) or API_HASH
 
-    acc = Client(f"user_session_{user_id}", session_string=user_session, api_hash=user_api_hash, api_id=user_api_id, in_memory=True)
+    # 150 Workers और 10 Concurrent Channels से सुपरफास्ट स्पीड
+    acc = Client(
+        f"user_session_{user_id}", 
+        session_string=user_session, 
+        api_hash=user_api_hash, 
+        api_id=user_api_id, 
+        in_memory=True,
+        workers=150,
+        max_concurrent_transmissions=10
+    )
     try:
         await acc.start()
     except Exception as e:
@@ -339,7 +348,7 @@ async def start_clone_task(client: Client, user_id: int):
     total_bytes = 0
     start_time = time.time()
 
-    status_msg = await client.send_message(user_id, "🚀 **कंटेंट डाउनलोडिंग व अपलोडिंग शुरू...**")
+    status_msg = await client.send_message(user_id, "🚀 **हाई-स्पीड ट्रांसफर शुरू हो रहा है...**")
 
     for msgid in range(start_id, end_id + 1):
         if batch_temp.IS_BATCH.get(user_id):
@@ -402,7 +411,6 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         print(f"Message fetch error: {e}")
         return False, 0
 
-    # कैप्शन प्रोसेसिंग (Replace / Edit / Extra)
     final_caption = msg.caption or ""
 
     if task.get("custom_caption"):
@@ -416,7 +424,6 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
     if task.get("extra_caption"):
         final_caption = f"{final_caption}\n\n{task['extra_caption']}" if final_caption else task["extra_caption"]
 
-    # केवल टेक्स्ट मैसेज होने पर
     if msg.text:
         text_to_send = msg.text
         if task.get("custom_caption"):
@@ -431,7 +438,6 @@ async def process_media(client: Client, acc: Client, user_id: int, source_chat, 
         await client.send_message(target_chat, text_to_send, entities=msg.entities)
         return True, len(text_to_send.encode('utf-8'))
 
-    # फ़ाइल का नाम निकालना
     file_name = get_file_name_from_msg(msg)
 
     down_start = time.time()
